@@ -287,3 +287,51 @@ Collect info:
 - What you did before error
 
 This helps find the problem faster.
+
+## Location problems
+
+### IP blocked by PocketOption
+
+Symptoms:
+
+- Timeouts on connection
+- Error Core(ChannelReceiver(Closed))
+- Balance not returned
+- Candles not coming
+
+Cause: server IP in a restricted country, or hosting provider
+is blacklisted by PocketOption.
+
+Solution:
+
+1. Change VDS location in hosting panel
+2. Restart the bot
+3. Check access: see docs/SETUP.en.md → "Server Location"
+
+Recommended VDS locations:
+
+- Hong Kong (tested)
+- Turkey
+- Kazakhstan
+- Thailand
+- Serbia
+
+Details — in docs/SETUP.en.md → "Server Location".
+
+### Slow ping to API
+
+Symptoms:
+
+- Slow candle fetching
+- Delays in series
+- Frequent timeouts
+
+Cause: server is far from PocketOption API (Europe), or network
+is slow.
+
+Solution:
+
+1. Check ping: `ping demo-api-eu.po.market`
+2. Change VDS location (closer to Europe)
+3. Check server internet speed: `speedtest-cli`
+

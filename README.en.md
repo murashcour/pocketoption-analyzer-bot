@@ -33,10 +33,13 @@ at your own risk. The author is not responsible for financial losses.
 
 ## Requirements
 
+- **Debian-based server:**
+  - Ubuntu 24.04.5 LTS (recommended, tested)
+  - Debian 12+ (compatible)
 - Python 3.10+
-- Ubuntu 20.04+ / Debian 11+ / other Linux
 - PocketOption account (demo or live)
 - SSID token (obtained via browser)
+- **VDS in a recommended country** (see [docs/SETUP.en.md](docs/SETUP.en.md))
 
 ## Installation
 

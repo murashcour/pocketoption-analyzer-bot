@@ -1,13 +1,113 @@
-# Server Setup
-
-Step-by-step guide for deploying the bot on an Ubuntu/Debian server.
+Step-by-step guide for deploying the bot on a Debian-based server.
+Recommended: Ubuntu 24.04.5 LTS (tested).
 
 ## Requirements
 
-- Ubuntu 20.04+ / Debian 11+ / other Linux
+- **Debian-based distribution:**
+  - Ubuntu 24.04.5 LTS (recommended, tested)
+  - Debian 12+ (compatible)
 - Python 3.10+
 - SSH access to server
 - PocketOption account (demo or live)
+- **VDS in a recommended country** (see section below)
+
+## Server Location
+
+The bot connects to the PocketOption API. If the server IP is blocked
+by the broker — the bot will not be able to connect.
+
+### Verified location
+
+**🇭🇰 Hong Kong** — tested in production: stable connection,
+reasonable price.
+
+- **Platform:** HostVDS (OpenStack, NVMe)
+- **Cost:** ~$4-5/month
+- **Payment:** Mir card, SBP, crypto, WebMoney, Alipay
+- **IP not disclosed** (security)
+
+⚠️ Hong Kong region may be temporarily unavailable for VDS ordering.
+Check in the hosting panel when ordering.
+
+### Recommended (community experience)
+
+- 🇹🇷 Turkey
+- 🇰🇿 Kazakhstan
+- 🇹🇭 Thailand
+- 🇷🇸 Serbia
+
+Not personally tested. Use as a guide when choosing a VDS.
+
+### Not recommended
+
+Binary options regulatory restrictions:
+
+- 🇪🇺 EU (ESMA)
+- 🇺🇸 USA (CFTC)
+- 🇬🇧 UK (FCA)
+- 🇦🇺 Australia (ASIC)
+- 🇨🇦 Canada
+- 🇮🇱 Israel
+
+Sanctions (may be blocked):
+
+- 🇷🇺 Russia
+- 🇧🇾 Belarus
+- 🇮🇷 Iran
+- 🇰🇵 North Korea
+
+### Availability check
+
+Before installing the bot, verify that PocketOption is accessible
+from the server:
+
+    curl -sI https://pocketoption.com | head -3
+
+Expected: HTTP/2 200 or 302.
+
+    curl -sI https://demo-api-eu.po.market | head -3
+
+Expected: HTTP/2 403 (this is normal — API requires authorization).
+
+### Full connection test
+
+After installing dependencies and obtaining SSID, verify:
+
+    python3 -c "
+    import asyncio, os
+    from BinaryOptionsToolsV2 import PocketOptionAsync
+    async def main():
+        async with PocketOptionAsync(ssid=os.getenv('PO_SSID')) as c:
+            bal = await c.balance()
+            print(f'✅ Balance: \${bal:.2f}')
+            candles = await c.get_candles('EURUSD_otc', 60, 5)
+            print(f'✅ Candles: {len(candles) if candles else 0}')
+    asyncio.run(main())
+    "
+
+If you see balance and candles — the location is suitable.
+
+### What to do if IP is blocked
+
+Symptoms:
+
+- Timeouts on connection
+- Error Core(ChannelReceiver(Closed))
+- Balance not returned
+- Candles not coming
+
+Solutions:
+
+1. Change VDS location in hosting panel
+2. Restart the bot
+3. Check access with the test above
+
+### Important
+
+- Recommendation list is based on community experience
+- PocketOption does not publish an official allowed countries list
+- The only reliable check — run the test from a specific IP
+
 
 ## Step 1. System packages
 
