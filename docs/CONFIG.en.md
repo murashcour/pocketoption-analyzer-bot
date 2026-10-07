@@ -34,13 +34,89 @@ Example at balance 150:
 
 ## Payout
 
+### OTC
+
 | Parameter | Default | Description |
 |---|---|---|
-| payout_min | 85 | Min pair payout (%) |
-| payout_max | 92 | Max pair payout (%) |
+| payout_min_otc | 85 | Min OTC payout (%) |
+| payout_max_otc | 92 | Max OTC payout (%) |
+
+### Real
+
+| Parameter | Default | Description |
+|---|---|---|
+| payout_min_real | 75 | Min Real payout (%) |
+| payout_max_real | 92 | Max Real payout (%) |
+
+### Common
+
+| Parameter | Default | Description |
+|---|---|---|
 | payout_recheck_sec | 1800 | Payout recheck (sec) |
 
 Pairs with payout outside range are not traded.
+
+**Why different ranges:**
+- OTC — synthetic, payout higher (85-92%)
+- Real — real market, payout lower (75-92%)
+
+## Real pairs
+
+| Parameter | Default | Description |
+|---|---|---|
+| include_real | True | Include Real pairs |
+| real_asset_types | ["currency"] | Real types (Currency only) |
+| timezone | "Europe/Moscow" | Timezone for Forex check |
+| forex_trade_days | [0, 1, 2, 3, 4] | Forex days (0=Mon, 4=Fri) |
+
+**Logic:**
+- Real pairs — **Currency only** (forex), crypto excluded
+- Real pairs are not traded on weekends (Forex closed Sat-Sun)
+- Weekday check by `timezone` (MSK)
+
+## Drawdown protection
+
+| Parameter | Default | Description |
+|---|---|---|
+| max_drawdown_percent | 30 | Drawdown % to trigger |
+| drawdown_pause_sec | 1800 | Pause on drawdown (sec) |
+| drawdown_max_count | 2 | Max drawdowns before STOP |
+
+**Logic:**
+- Start: `reference_balance = initial_balance`
+- If `current < reference * (1 - percent/100)`:
+  - `drawdown_count += 1`
+  - If `count >= max_count` → **STOP** (wait for reaction)
+  - Else → **pause** → `reference = current` → **continue**
+
+**Modes:**
+- `count = 1` → STOP after 1st drawdown (no pause)
+- `count = 2` → pause after 1st, STOP after 2nd (default)
+
+## News (TradingView)
+
+| Parameter | Default | Description |
+|---|---|---|
+| news_enabled | True | Enable news pause |
+| news_importance_min | 2 | Min importance (2=Medium, 3=High) |
+| news_pre_pause_min | 10 | Pause N min before news |
+| news_post_pause_min | 20 | Pause N min after news |
+| news_currencies | ["USD", "EUR", "GBP", "JPY"] | News currencies |
+| news_refresh_hours | 4 | Calendar refresh (hours) |
+| news_fallback_stop | True | STOP if calendar not loaded |
+
+**Source:** `https://economic-calendar.tradingview.com/events` (free).
+
+**Importance:**
+- `1` = Low (not blocking)
+- `2` = Medium (blocking if `news_importance_min=2`)
+- `3` = High (blocking if `importance_min<=3`)
+
+**Fallback:**
+- If calendar not loaded and `news_fallback_stop=True` → **STOP**
+- If `False` → **trade without pause** (not recommended)
+
+
 
 ## 1m Analysis
 

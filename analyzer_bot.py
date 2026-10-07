@@ -27,6 +27,11 @@ import signal
 import sys
 import time
 from datetime import datetime
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
 from typing import Optional, List, Tuple
 
 from BinaryOptionsToolsV2 import PocketOptionAsync
@@ -44,14 +49,27 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # ==================== DEFAULT CONFIG ====================
 DEFAULT_CONFIG = {
     "expiration": 60,
-    "check_interval_sec": 15,
-    "max_checks": 4,
+    "check_interval_sec": 30,
+    "max_checks": 3,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0, 2.0, 4.0, 8.0],
+      # Payout (общие)
     "payout_min": 85,
     "payout_max": 92,
+    # Payout OTC
+    "payout_min_otc": 85,
+    "payout_max_otc": 92,
+    # Payout Real
+    "payout_min_real": 75,
+    "payout_max_real": 92,
     "payout_recheck_sec": 1800,
+    # Real-пары
+    "include_real": True,
+    "real_asset_types": ["currency"],
+    # Часовой пояс
+    "timezone": "Europe/Moscow",
+    "forex_trade_days": [0, 1, 2, 3, 4],
     "min_confirmations": 3,
     "rsi_overbought": 75,
     "rsi_oversold": 25,
@@ -67,7 +85,19 @@ DEFAULT_CONFIG = {
     "tf_10m_overbought": 75,
     "tf_10m_oversold": 25,
     "skip_before_change_plus": 5,
-    "skip_before_change_minus": 1,
+    "skip_before_change_minus": 3,
+    # Просадка (drawdown)
+    "max_drawdown_percent": 30,
+    "drawdown_pause_sec": 1800,
+    "drawdown_max_count": 2,
+     # Новости
+    "news_enabled": True,
+    "news_importance_min": 2,
+    "news_pre_pause_min": 10,
+    "news_post_pause_min": 20,
+    "news_currencies": ["USD", "EUR", "GBP", "JPY"],
+    "news_refresh_hours": 4,
+    "news_fallback_stop": True,
 }
 
 # ==================== ГЛОБАЛЬНЫЕ НАСТРОЙКИ ====================
@@ -535,8 +565,17 @@ class StopChecker:
 
 # ==================== СЕРИЯ С УДВОЕНИЕМ ====================
 # ==================== MARTINGALE SERIES ====================
-async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker) -> bool:
-    """Серия с удвоением. Возвращает True (плюс) / False (минус)."""
+async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state) -> bool:
+    """
+    Серия с удвоением (новая логика):
+    - 1-я сделка $1 → проверка через 30 сек
+    - 2-я сделка $2 → если 1-я в минусе → ждём закрытия
+    - Проверка итога (1+2) через балансы
+    - Если минус → поиск сигнала (как в основном цикле) → 3-я $4
+    - Проверка итога (1+2+3) → результат
+
+    Возвращает True (плюс) / False (минус).
+    """
     try:
         B_start = float(await client.balance())
     except Exception as e:
@@ -546,12 +585,12 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     steps = get_martingale_steps(B_start)
     direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
 
-    logger.info(f"\n🎬 СЕРИЯ {direction_str} | Баланс до = ${B_start:.2f}")
+    logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
     logger.info(f"   Ступени: {steps}")
 
     open_deals = []
 
-    # СТУПЕНЬ 1
+    # ==================== СТУПЕНЬ 1 ====================
     current_price = await get_current_price(client, pair)
     if current_price is None:
         logger.error("❌ Не удалось получить цену")
@@ -569,61 +608,43 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
 
     open_deals.append({
         "id": trade_id,
+        "pair": pair,
         "entry": current_price,
         "amount": bet,
+        "signal": signal,
         "open_time": time.time(),
     })
-    logger.info(f"📈 [1/4] Открыл ${bet:.2f} {direction_str} @ {current_price}")
+    logger.info(f"📈 [1/3] Открыл ${bet:.2f} {direction_str} @ {current_price}")
 
-    # ПРОВЕРКИ
-    for check_num in range(1, CFG["max_checks"] + 1):
-        if stopper.requested():
-            logger.warning("⏹ Остановка во время серии")
-            break
+    # ==================== ПРОВЕРКА 1 (через 30 сек) ====================
+    await asyncio.sleep(CFG["check_interval_sec"])
 
-        if len(open_deals) >= 4:
-            logger.info(f"✅ Все 4 ступени открыты")
-            break
+    if stopper.requested():
+        logger.warning("⏹ Остановка во время серии")
+        return False
 
-        last_deal = open_deals[-1]
-        elapsed = time.time() - last_deal["open_time"]
-        if elapsed >= CFG["expiration"]:
-            logger.info(f"⏰ Последняя сделка закрылась ({elapsed:.0f}с)")
-            break
+    current_price = await get_current_price(client, pair)
+    if current_price is None:
+        logger.warning("⚠️ Цена не получена — пропускаю проверку")
+        first_in_profit = False
+    else:
+        first_entry = open_deals[0]["entry"]
+        if signal == "CALL":
+            first_in_profit = current_price > first_entry
+        else:
+            first_in_profit = current_price < first_entry
+        status = "+" if first_in_profit else "-"
+        logger.info(f"   Проверка 1 | Цена {current_price} | $1: {status}")
 
-        wait_sec = min(CFG["check_interval_sec"], CFG["expiration"] - elapsed + 1)
-        if wait_sec > 0:
-            await asyncio.sleep(wait_sec)
-
-        if stopper.requested():
-            break
-
+    # ==================== СТУПЕНЬ 2 (если 1-я в минусе) ====================
+    if not first_in_profit:
+        # 2-я сделка
         current_price = await get_current_price(client, pair)
         if current_price is None:
-            logger.warning(f"⚠️ Проверка {check_num}: цена не получена")
-            continue
+            logger.error("❌ Не удалось получить цену для 2-й")
+            return False
 
-        last_deal = open_deals[-1]
-        last_entry = last_deal["entry"]
-
-        if signal == "CALL":
-            last_in_profit = current_price > last_entry
-        else:
-            last_in_profit = current_price < last_entry
-
-        status = "+" if last_in_profit else "-"
-        logger.info(
-            f"   Проверка {check_num}/{CFG['max_checks']} | Цена {current_price} | "
-            f"последняя ${last_deal['amount']:.2f}:{status}"
-        )
-
-        if last_in_profit:
-            logger.info(f"⏸ Последняя в плюсе — ждём")
-            continue
-
-        i = len(open_deals)
-        bet = steps[i]
-
+        bet = steps[1]
         try:
             if signal == "CALL":
                 trade_id, _ = await client.buy(pair, bet, CFG["expiration"])
@@ -631,43 +652,166 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
                 trade_id, _ = await client.sell(pair, bet, CFG["expiration"])
         except Exception as e:
             logger.error(f"❌ Ошибка открытия ${bet}: {e}")
-            break
+            return False
 
         open_deals.append({
             "id": trade_id,
+            "pair": pair,
             "entry": current_price,
             "amount": bet,
+            "signal": signal,
             "open_time": time.time(),
         })
-        logger.info(
-            f"📈 [{i+1}/4] Открыл ${bet:.2f} {direction_str} @ {current_price}"
-        )
+        logger.info(f"📈 [2/3] Открыл ${bet:.2f} {direction_str} @ {current_price}")
 
-    # ЖДЁМ ЗАКРЫТИЯ
-    if open_deals:
+        # ==================== ЖДЁМ ЗАКРЫТИЯ 2-х СДЕЛОК ====================
+        # Ждём закрытия последней (2-й) + запас
         last_open_time = open_deals[-1]["open_time"]
         remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
-        logger.info(f"⏳ Ждём закрытия {len(open_deals)} сделок (~{remaining:.0f} сек)...")
+        logger.info(f"⏳ Ждём закрытия 2 сделок (~{remaining:.0f} сек)...")
         await stopper.sleep(remaining)
 
-    try:
-        B1 = float(await client.balance())
-    except Exception as e:
-        logger.error(f"Не удалось получить баланс: {e}")
-        return False
+        # Проверка итога (1+2) через балансы
+        try:
+            B_after_2 = float(await client.balance())
+        except Exception as e:
+            logger.error(f"Не удалось получить баланс: {e}")
+            return False
 
-    delta = B1 - B_start
-    logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B1:.2f} (Δ {delta:+.2f})")
+        delta_2 = B_after_2 - B_start
+        logger.info(f"🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})")
 
-    if B1 > B_start:
-        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta:+.2f})")
-        return True
+        if delta_2 > 0:
+            logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})")
+            return True
+        else:
+            logger.info(f"❌ Итог 1+2 минус (Δ {delta_2:+.2f}) — ищу сигнал для 3-й")
+
+            # ==================== ПОИСК СИГНАЛА ДЛЯ 3-й СДЕЛКИ ====================
+            # Меняем пары как в основном алгоритме, пока не найдём сигнал
+            # После круга (все пары) → пауза 30 минут
+
+            start_pair = state.current_pair()
+            pairs_tried = 0
+            max_pairs = len(state.pairs)
+            signal_3 = None
+            pair_3 = None
+
+            while True:
+                if stopper.requested():
+                    logger.warning("⏹ Остановка во время поиска")
+                    return False
+
+                # Проверка сигнала на текущей паре
+                pair_3 = state.current_pair()
+                logger.info(f"   🔍 Ищу сигнал на {pair_3}...")
+
+                # Проверка payout
+                live_payout = await check_payout(client, pair_3)
+                if live_payout is None or live_payout < CFG["payout_min"] or live_payout > CFG["payout_max"]:
+                    logger.info(f"   ⏸ {pair_3}: payout {live_payout} — смена пары")
+                    state.change_pair("payout вне диапазона")
+                    pairs_tried += 1
+                    await stopper.sleep(2)
+                    if pairs_tried >= max_pairs:
+                        logger.warning(f"   😴 Обошли все пары — пауза 30 мин")
+                        await stopper.sleep(1800)
+                        pairs_tried = 0
+                    continue
+
+                # Проверка сигнала
+                signal_3 = await full_analysis(client, pair_3)
+                if signal_3 is not None:
+                    logger.info(f"   ✅ Найден сигнал на {pair_3}: {signal_3}")
+                    break
+
+                # Нет сигнала → смена пары
+                logger.info(f"   ⏸ {pair_3}: нет сигнала — смена пары")
+                state.change_pair("нет сигнала")
+                pairs_tried += 1
+                await stopper.sleep(2)
+
+                if pairs_tried >= max_pairs:
+                    logger.warning(f"   😴 Обошли все пары — пауза 30 мин")
+                    await stopper.sleep(1800)
+                    pairs_tried = 0
+
+            # ==================== СТУПЕНЬ 3 ====================
+            direction_3 = "ВВЕРХ ⬆️ (CALL)" if signal_3 == "CALL" else "ВНИЗ ⬇️ (PUT)"
+            current_price = await get_current_price(client, pair_3)
+            if current_price is None:
+                logger.error("❌ Не удалось получить цену для 3-й")
+                return False
+
+            bet = steps[2]  # $4
+            try:
+                if signal_3 == "CALL":
+                    trade_id, _ = await client.buy(pair_3, bet, CFG["expiration"])
+                else:
+                    trade_id, _ = await client.sell(pair_3, bet, CFG["expiration"])
+            except Exception as e:
+                logger.error(f"❌ Ошибка открытия ${bet}: {e}")
+                return False
+
+            open_deals.append({
+                "id": trade_id,
+                "pair": pair_3,
+                "entry": current_price,
+                "amount": bet,
+                "signal": signal_3,
+                "open_time": time.time(),
+            })
+            logger.info(f"📈 [3/3] Открыл ${bet:.2f} {direction_3} @ {current_price} на {pair_3}")
+
+            # ==================== ЖДЁМ ЗАКРЫТИЯ 3-й ====================
+            last_open_time = open_deals[-1]["open_time"]
+            remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
+            logger.info(f"⏳ Ждём закрытия 3-й сделки (~{remaining:.0f} сек)...")
+            await stopper.sleep(remaining)
+
+            # ==================== ИТОГ ====================
+            try:
+                B_final = float(await client.balance())
+            except Exception as e:
+                logger.error(f"Не удалось получить баланс: {e}")
+                return False
+
+            delta_final = B_final - B_start
+            logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
+
+            if delta_final > 0:
+                logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})")
+                return True
+            else:
+                logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_final:+.2f})")
+                return False
+
+    # ==================== 1-я В ПЛЮСЕ — ЖДЁМ ЗАКРЫТИЯ ====================
     else:
-        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta:+.2f})")
-        return False
+        last_open_time = open_deals[-1]["open_time"]
+        remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
+        logger.info(f"⏳ 1-я в плюсе — ждём закрытия (~{remaining:.0f} сек)...")
+        await stopper.sleep(remaining)
+
+        try:
+            B1 = float(await client.balance())
+        except Exception as e:
+            logger.error(f"Не удалось получить баланс: {e}")
+            return False
+
+        delta = B1 - B_start
+        logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B1:.2f} (Δ {delta:+.2f})")
+
+        if delta > 0:
+            logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta:+.2f})")
+            return True
+        else:
+            logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta:+.2f})")
+            return False
 
 
-# ==================== СОСТОЯНИЕ ====================
+
+#===================== СОСТОЯНИЕ ====================
 # ==================== STATE ====================
 class TraderState:
     """Состояние трейдера: пары, счётчики, лимиты."""
@@ -757,45 +901,224 @@ class TraderState:
 
 # ==================== ЗАГРУЗКА ПАР ====================
 # ==================== LOAD PAIRS ====================
+
+# ==================== ЧЁРНЫЙ СПИСОК ЭКЗОТИКИ ====================
+# ==================== EXOTIC BLACKLIST ====================
+EXOTIC_BLACKLIST = {
+    "TNDUSD_otc", "USDBRL_otc", "USDARS_otc", "SYPUSD_otc",
+    "USDCLP_otc", "USDINR_otc", "USDPKR_otc", "USDBDT_otc",
+    "USDEGP_otc", "NGNUSD_otc", "UAHUSD_otc", "USDPHP_otc",
+    "USDMYR_otc", "JODCNY_otc", "OMRCNY_otc", "SARCNY_otc",
+    "AEDCNY_otc", "QARCNY_otc", "EURRUB_otc", "LBPUSD_otc",
+    "ZARUSD_otc", "MADUSD_otc", "USDDZD_otc", "USDCOP_otc",
+}
+
+# ==================== НОВОСТИ (TRADINGVIEW) ====================
+# ==================== NEWS (TRADINGVIEW) ====================
+NEWS_CACHE = []  # Кэш событий
+NEWS_LAST_LOAD = 0
+
+
+def fetch_news_calendar() -> list:
+    """
+    Загружает экономический календарь с TradingView.
+    Возвращает список событий.
+    """
+    if not REQUESTS_AVAILABLE:
+        logger.warning("⚠️ requests не установлен — новости недоступны")
+        return []
+
+    try:
+        from datetime import timedelta
+        now = datetime.utcnow()
+        from_date = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        to_date = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        url = "https://economic-calendar.tradingview.com/events"
+        headers = {
+            "Origin": "https://www.tradingview.com",
+            "User-Agent": "Mozilla/5.0",
+        }
+        params = {
+            "from": from_date,
+            "to": to_date,
+        }
+
+        r = requests.get(url, headers=headers, params=params, timeout=15)
+        if r.status_code != 200:
+            logger.warning(f"⚠️ TradingView API: HTTP {r.status_code}")
+            return []
+
+        data = r.json()
+        events = data.get("result", [])
+        logger.info(f"📰 Загружено {len(events)} новостей с TradingView")
+        return events
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки новостей: {e}")
+        return []
+
+
+def check_news_pause():
+    """
+    Проверяет, не идёт ли сейчас новость.
+    Возвращает (пауза_нужна, секунд_ждать, событие).
+    Или ("STOP", 0, None) если календарь не загружен и fallback_stop=True.
+    """
+    global NEWS_CACHE, NEWS_LAST_LOAD
+
+    if not CFG.get("news_enabled", False):
+        return False, 0, None
+
+    refresh_sec = CFG.get("news_refresh_hours", 4) * 3600
+    if time.time() - NEWS_LAST_LOAD > refresh_sec or not NEWS_CACHE:
+        NEWS_CACHE = fetch_news_calendar()
+        NEWS_LAST_LOAD = time.time()
+
+        if not NEWS_CACHE and CFG.get("news_fallback_stop", True):
+            logger.error("❌ Календарь новостей не загружен — СТОП")
+            return "STOP", 0, None
+
+    importance_min = CFG.get("news_importance_min", 2)
+    pre_pause = CFG.get("news_pre_pause_min", 10) * 60
+    post_pause = CFG.get("news_post_pause_min", 20) * 60
+    allowed_currencies = CFG.get("news_currencies", ["USD", "EUR", "GBP", "JPY"])
+
+    now = time.time()
+
+    for event in NEWS_CACHE:
+        importance = event.get("importance", 0)
+        if importance < importance_min:
+            continue
+
+        currency = event.get("currency", "")
+        if currency not in allowed_currencies:
+            continue
+
+        try:
+            event_time_str = event.get("date", "")
+            event_time = datetime.fromisoformat(
+                event_time_str.replace("Z", "+00:00")
+            ).timestamp()
+        except Exception:
+            continue
+
+        if event_time - pre_pause <= now <= event_time + post_pause:
+            wait_sec = int(event_time + post_pause - now)
+            title = event.get("title", "?")
+            logger.warning(f"📰 НОВОСТЬ: {title} ({currency}) — пауза {wait_sec} сек")
+            return True, wait_sec, event
+
+    return False, 0, None
+
 async def load_currency_pairs(client) -> List[str]:
-    """Загружает OTC-валютные пары с payout в диапазоне."""
+    """
+    Загружает OTC + Real пары с разными payout-фильтрами.
+    - OTC: payout 85-92%
+    - Real: payout 75-92%, только Currency (forex), Пн-Пт
+    """
     try:
         assets = await client.active_assets()
     except Exception as e:
         logger.error(f"❌ Ошибка active_assets: {e}")
         return []
 
-    candidates = []
+    # Определяем текущий день недели (для Forex)
+    try:
+        import pytz
+        tz = pytz.timezone(CFG.get("timezone", "Europe/Moscow"))
+        now = datetime.now(tz)
+        weekday = now.weekday()  # 0=Пн, 6=Вс
+    except Exception:
+        now = datetime.now()
+        weekday = now.weekday()
+
+    forex_open = weekday in CFG.get("forex_trade_days", [0, 1, 2, 3, 4])
+
+    candidates_otc = []
+    candidates_real = []
+
     for a in assets:
         if not isinstance(a, dict):
             continue
         sym = a.get("symbol") or ""
         atype = (a.get("asset_type") or "").lower()
-        if not (a.get("is_otc") and a.get("is_active", True)):
-            continue
-        if atype != "currency":
-            continue
-        if not sym.endswith("_otc"):
-            continue
-        candidates.append(sym)
+        is_otc = a.get("is_otc", False)
+        is_active = a.get("is_active", True)
 
-    logger.info(f"📋 Всего OTC-валют: {len(candidates)}")
-    logger.info(f"🔎 Фильтр payout [{CFG['payout_min']}, {CFG['payout_max']}]%...")
+        if not is_active:
+            continue
+
+        # === OTC ===
+        if is_otc or sym.endswith("_otc"):
+            if atype != "currency":
+                continue
+            if not sym.endswith("_otc"):
+                continue
+            if sym in EXOTIC_BLACKLIST:
+                continue
+            candidates_otc.append(("OTC", sym))
+            continue
+
+        # === REAL ===
+        if not CFG.get("include_real", False):
+            continue
+
+        # Только разрешённые типы (currency)
+        if atype not in CFG.get("real_asset_types", ["currency"]):
+            continue
+
+        # Forex — только Пн-Пт
+        if atype == "currency" and not forex_open:
+            logger.debug(f"⏸ [{sym}] Forex закрыт ({now.strftime('%A')}) — пропуск")
+            continue
+
+        if sym in EXOTIC_BLACKLIST:
+            continue
+
+        candidates_real.append(("REAL", sym))
+
+    logger.info(f"📋 OTC-кандидатов: {len(candidates_otc)}")
+    logger.info(f"📋 REAL-кандидатов: {len(candidates_real)}")
+    if not forex_open:
+        logger.info(f"   ⏸ Forex закрыт ({now.strftime('%A')}) — real не включаются")
+
+    # === Фильтр payout ===
+    logger.info(
+        f"🔎 Фильтр payout: OTC [{CFG['payout_min_otc']}, {CFG['payout_max_otc']}]%, "
+        f"REAL [{CFG['payout_min_real']}, {CFG['payout_max_real']}]%..."
+    )
 
     pairs = []
-    for i, sym in enumerate(candidates, 1):
+    total = len(candidates_otc) + len(candidates_real)
+    i = 0
+
+    for kind, sym in candidates_otc + candidates_real:
+        i += 1
         pay = await check_payout(client, sym)
         if pay is None:
             continue
-        if pay < CFG["payout_min"] or pay > CFG["payout_max"]:
-            continue
+
+        if kind == "OTC":
+            if pay < CFG["payout_min_otc"] or pay > CFG["payout_max_otc"]:
+                continue
+        else:  # REAL
+            if pay < CFG["payout_min_real"] or pay > CFG["payout_max_real"]:
+                continue
+
         pairs.append(sym)
         if i % 10 == 0:
-            logger.info(f"   ...проверено {i}/{len(candidates)}")
+            logger.info(f"   ...проверено {i}/{total}")
+
+    # Разделяем по типам (для лога)
+    otc_in = [p for p in pairs if p.endswith("_otc")]
+    real_in = [p for p in pairs if not p.endswith("_otc")]
 
     logger.info(f"📋 Прошли фильтр: {len(pairs)} пар")
+    logger.info(f"   ├─ OTC: {len(otc_in)}")
+    logger.info(f"   └─ REAL: {len(real_in)}")
     if pairs:
         logger.info(f"📋 {', '.join(pairs)}")
+
     return pairs
 # ==================== ОСНОВНОЙ ЦИКЛ ====================
 # ==================== MAIN LOOP ====================
@@ -806,6 +1129,10 @@ class Trader:
         self.ssid = ssid
         self.stopper = StopChecker()
         self.state: Optional[TraderState] = None
+        self.empty_candles_count = 0   # ← ДОБАВИТЬ
+        self.initial_balance = 0.0
+        self.reference_balance = 0.0
+        self.drawdown_count = 0
 
     async def run(self):
         async with PocketOptionAsync(ssid=self.ssid) as client:
@@ -816,6 +1143,16 @@ class Trader:
             except Exception as e:
                 logger.error(f"Ошибка баланса: {e}")
                 return
+
+            # === ИНИЦИАЛИЗАЦИЯ ПРОСАДКИ ===
+            self.initial_balance = balance
+            self.reference_balance = balance
+            self.drawdown_count = 0
+            logger.info(
+                f"🛡 Защита от просадки: {CFG['max_drawdown_percent']}%, "
+                f"пауза {CFG['drawdown_pause_sec']//60} мин, "
+                f"макс {CFG['drawdown_max_count']} просадок"
+            )
 
             pairs = await load_currency_pairs(client)
             if not pairs:
@@ -840,6 +1177,46 @@ class Trader:
                 try:
                     if self.stopper.requested():
                         break
+
+                    # === ПРОВЕРКА ПРОСАДКИ ===
+                    try:
+                        current_balance = float(await client.balance())
+                        threshold = self.reference_balance * (
+                            1 - CFG["max_drawdown_percent"] / 100
+                        )
+                        if current_balance < threshold:
+                            self.drawdown_count += 1
+                            logger.warning(
+                                f"🛑 ПРОСАДКА #{self.drawdown_count} "
+                                f"({CFG['max_drawdown_percent']}%): "
+                                f"${self.reference_balance:.2f} → ${current_balance:.2f}"
+                            )
+                            if self.drawdown_count >= CFG["drawdown_max_count"]:
+                                logger.error(
+                                    f"🛑 Достигнут лимит просадок "
+                                    f"({CFG['drawdown_max_count']}) — СТОП"
+                                )
+                                return
+                            pause_sec = CFG["drawdown_pause_sec"]
+                            logger.info(f"⏸ Пауза {pause_sec//60} мин...")
+                            await self.stopper.sleep(pause_sec)
+                            self.reference_balance = current_balance
+                            logger.info(
+                                f"✅ После паузы. Новый reference: "
+                                f"${self.reference_balance:.2f}"
+                            )
+                    except Exception as e:
+                        logger.debug(f"Ошибка проверки просадки: {e}")
+
+                    # === ПРОВЕРКА НОВОСТЕЙ ===
+                    news_pause, news_wait, news_event = check_news_pause()
+                    if news_pause == "STOP":
+                        logger.error("🛑 Новости недоступны — СТОП")
+                        return
+                    if news_pause:
+                        logger.info(f"⏸ Пауза до конца новости ({news_wait} сек)...")
+                        await self.stopper.sleep(news_wait + 5)
+                        continue
 
                     # Перепроверка payout
                     if time.time() - last_payout_check >= CFG["payout_recheck_sec"]:
@@ -869,17 +1246,28 @@ class Trader:
                         self.state.current_payout = live_payout
                         logger.info(f"💹 [{pair}] Payout {live_payout:.1f}% — OK")
 
-                    # Анализ
+                                      # Анализ
                     signal = await full_analysis(client, pair)
                     if signal is None:
+                        # Счётчик "Мало данных"
+                        self.empty_candles_count += 1
+                        if self.empty_candles_count >= 5:
+                            logger.warning("⚠️ 5 раз подряд 'Мало данных' — пауза 60 сек")
+                            await self.stopper.sleep(60)
+                            self.empty_candles_count = 0
+                            continue
+
                         if self.state.on_skip() == "CHANGE_PAIR":
+                            await self.stopper.sleep(2)   # ← sleep при CHANGE_PAIR
                             continue
                         await self.stopper.sleep(20)
                         continue
+                    else:
+                        self.empty_candles_count = 0   # ← СБРОС при успехе
 
                     self.state.skip_streak = 0
                     is_win = await run_martingale_series(
-                        client, pair, signal, self.stopper
+                        client, pair, signal, self.stopper, self.state
                     )
 
                     if is_win:
@@ -922,33 +1310,47 @@ class Trader:
 # ==================== ИНТЕРАКТИВНОЕ МЕНЮ ====================
 # ==================== INTERACTIVE MENU ====================
 # Поля, которые можно менять через меню
+
 MENU_FIELDS = [
+    # Основные
     ("expiration", "Экспирация (сек)"),
     ("check_interval_sec", "Интервал проверок (сек)"),
     ("max_checks", "Макс. проверок ступеней"),
     ("base_percent", "Базовый % от баланса"),
     ("min_balance_for_percent", "Порог баланса для %"),
-    ("payout_min", "Мин. payout (%)"),
-    ("payout_max", "Макс. payout (%)"),
+    # Payout OTC
+    ("payout_min_otc", "Мин. payout OTC (%)"),
+    ("payout_max_otc", "Макс. payout OTC (%)"),
+    # Payout Real
+    ("payout_min_real", "Мин. payout Real (%)"),
+    ("payout_max_real", "Макс. payout Real (%)"),
     ("payout_recheck_sec", "Перепроверка payout (сек)"),
+    # Real-пары
+    ("include_real", "Включать Real-пары"),
+    ("real_asset_types", "Типы Real (currency)"),
+    ("timezone", "Часовой пояс"),
+    ("forex_trade_days", "Дни Forex (0=Пн)"),
+    # Анализ 1м
     ("min_confirmations", "Мин. подтверждений"),
     ("rsi_overbought", "RSI перекуп"),
     ("rsi_oversold", "RSI перепрод"),
     ("rsi_bull_min", "RSI бычий порог"),
     ("rsi_bear_max", "RSI медвежий порог"),
+    # S/R, ATR
     ("sr_lookback", "S/R lookback (свечей)"),
     ("sr_proximity_percent", "S/R близость (%)"),
     ("atr_period", "ATR период"),
     ("atr_min_percent", "ATR мин. (%)"),
+    # Мульти-ТФ
     ("tf_3m_rsi_bull", "3м RSI бычий"),
     ("tf_3m_rsi_bear", "3м RSI медвежий"),
     ("tf_3m_neutral_blocks", "3м нейтральный блок"),
     ("tf_10m_overbought", "10м RSI перекуп"),
     ("tf_10m_oversold", "10м RSI перепрод"),
+    # Пропуски
     ("skip_before_change_plus", "Пропусков после +"),
     ("skip_before_change_minus", "Пропусков после -"),
 ]
-
 
 def show_settings_menu(cfg: dict):
     """Показывает текущие настройки."""
@@ -1090,6 +1492,33 @@ async def main():
         return
 
     logger.info("✅ SSID валиден")
+
+    # === ПРОВЕРКА SSID ЧЕРЕЗ API ===
+    logger.info("🔎 Проверка подключения к PocketOption API...")
+    ssid_ok = False
+    try:
+        async with PocketOptionAsync(ssid=ssid) as test_client:
+            for attempt in range(3):
+                try:
+                    candles = await test_client.get_candles("EURUSD_otc", 60, 5)
+                    if candles and len(candles) > 0:
+                        ssid_ok = True
+                        logger.info(f"✅ Свечи получены ({len(candles)} шт.)")
+                        break
+                except Exception as e:
+                    logger.debug(f"Попытка {attempt+1}: {e}")
+                await asyncio.sleep(2)
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения: {e}")
+
+    if not ssid_ok:
+        logger.error("❌ SSID не отдаёт свечи — возможно, инвалидирован")
+        print("\n⚠️ SSID валиден по формату, но API не отвечает свечами.")
+        print("   Обнови SSID через SSID-finder или заново залогинься.")
+        print("   Подробнее: docs/SSID.md\n")
+        return
+
+    logger.info("✅ SSID работает")
 
     # Загрузка конфига
     CFG = load_config()

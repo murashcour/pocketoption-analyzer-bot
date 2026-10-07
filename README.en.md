@@ -22,14 +22,17 @@ at your own risk. The author is not responsible for financial losses.
 
 ## Features
 
-- Multi-timeframe analysis: 1m + 3m + 10m
-- Indicators: SMA14, EMA20, EMA50, RSI14
-- Filters: S/R levels, ATR (volatility), candlestick patterns
-- Martingale: 1% -> 2% -> 4% -> 8% of balance
-- Pair rotation: switch on skips or losing series
-- Payout filter: [85, 92]% with recheck every 30 minutes
-- Interactive menu: adjust parameters at startup
-- Runs in screen: survives SSH disconnection
+- 📊 Multi-timeframe analysis: 1m + 3m + 10m
+- 🎯 Indicators: SMA14, EMA20, EMA50, RSI14
+- 📈 Filters: S/R levels, ATR (volatility), candlestick patterns
+- 🌍 Real pairs (Currency / Forex): OTC + real currency pairs
+- 💰 Martingale: 1% -> 2% -> 4% (no 4th step)
+- 🔄 Pair rotation: switch on 3 skips or losing series
+- 💹 Payout filter: OTC [85, 92]%, Real [75, 92]%
+- 🛡 Drawdown protection: pause at -30%, stop after 2nd
+- 📰 Pause on important news (TradingView Calendar)
+- ⚙️ Interactive menu: 30+ settings
+- 🖥️ Runs in screen: survives SSH disconnection
 
 ## Requirements
 

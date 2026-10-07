@@ -1,6 +1,35 @@
 Step-by-step guide for deploying the bot on a Debian-based server.
 Recommended: Ubuntu 24.04.5 LTS (tested).
 
+## What the bot does
+
+- 📊 Multi-timeframe analysis: 1m + 3m + 10m
+- 🌍 Real pairs (Currency / Forex): OTC + real currency pairs
+- 💰 Martingale: 1% -> 2% -> 4% (no 4th step)
+- 🔄 Pair rotation: switch on 3 skips or losing series
+- 💹 Payout filter: OTC [85, 92]%, Real [75, 92]%
+- 🛡 Drawdown protection: pause at -30%, stop after 2nd
+- 📰 Pause on important news (TradingView Calendar)
+- ⚙️ Interactive menu: 30+ settings
+- 🖥️ Runs in screen: survives SSH disconnection
+
+### Real pairs details
+
+- **Currency only** (forex) — crypto excluded
+- **Mon-Fri only** — Forex closed on weekends (Sat-Sun)
+- **Payout 75-92%** — lower than OTC
+- **Day check** — by `Europe/Moscow` timezone
+
+### Protection details
+
+- **Drawdown 30%** — when balance drops:
+  - 1st drawdown → pause 30 min
+  - 2nd drawdown → STOP (wait for reaction)
+- **News pause** — 10 min before and 20 min after:
+  - High + Medium importance
+  - USD, EUR, GBP, JPY
+  - TradingView Calendar
+
 ## Requirements
 
 - **Debian-based distribution:**
