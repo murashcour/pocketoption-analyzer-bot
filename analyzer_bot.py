@@ -485,6 +485,23 @@ async def full_analysis(client, pair: str) -> Optional[str]:
 
 # ==================== PAYOUT ====================
 # ==================== PAYOUT ====================
+
+
+def get_payout_range(pair_name: str) -> Tuple[float, float]:
+    """
+    Возвращает (min, max) payout для пары.
+    OTC → payout_min_otc/max_otc, Real → payout_min_real/max_real.
+    """
+    if pair_name.endswith("_otc"):
+        return (
+            CFG.get("payout_min_otc", CFG["payout_min"]),
+            CFG.get("payout_max_otc", CFG["payout_max"]),
+        )
+    return (
+        CFG.get("payout_min_real", CFG["payout_min"]),
+        CFG.get("payout_max_real", CFG["payout_max"]),
+    )
+
 def parse_payout(raw) -> Optional[float]:
     """Парсит payout из разных форматов."""
     if raw is None:
@@ -708,7 +725,8 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
 
                 # Проверка payout
                 live_payout = await check_payout(client, pair_3)
-                if live_payout is None or live_payout < CFG["payout_min"] or live_payout > CFG["payout_max"]:
+                pmin, pmax = get_payout_range(pair_3)
+                if live_payout is None or live_payout < pmin or live_payout > pmax:
                     logger.info(f"   ⏸ {pair_3}: payout {live_payout} — смена пары")
                     state.change_pair("payout вне диапазона")
                     pairs_tried += 1
@@ -1156,7 +1174,10 @@ class Trader:
 
             pairs = await load_currency_pairs(client)
             if not pairs:
-                logger.error(f"❌ Нет пар с payout [{CFG['payout_min']}, {CFG['payout_max']}]%")
+                logger.error(
+                    f"❌ Нет пар с payout: OTC [{CFG['payout_min_otc']}, {CFG['payout_max_otc']}]%, "
+                    f"REAL [{CFG['payout_min_real']}, {CFG['payout_max_real']}]%"
+                )
                 return
 
             self.state = TraderState(pairs)
@@ -1236,10 +1257,11 @@ class Trader:
                             logger.warning(f"⚠️ [{pair}] Payout не получен")
                             self.state.change_pair("payout не получен")
                             continue
-                        if live_payout < CFG["payout_min"] or live_payout > CFG["payout_max"]:
+                        pmin, pmax = get_payout_range(pair)
+                        if live_payout < pmin or live_payout > pmax:
                             logger.warning(
                                 f"⚠️ [{pair}] Payout {live_payout:.1f}% вне "
-                                f"[{CFG['payout_min']}, {CFG['payout_max']}]%"
+                                f"[{pmin}, {pmax}]%"
                             )
                             self.state.change_pair("payout вне диапазона")
                             continue

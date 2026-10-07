@@ -237,7 +237,7 @@ Command clears file (without deleting).
 4. Install again:
 
        cd ~
-       git clone https://github.com/murachour/pocketoption-analyzer-bot.git bot
+       git clone https://github.com/murashcour/pocketoption-analyzer-bot.git bot
        cd bot
        python3 -m venv venv
        source venv/bin/activate

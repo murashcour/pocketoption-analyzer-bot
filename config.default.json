@@ -1,13 +1,34 @@
 {
   "expiration": 60,
-  "check_interval_sec": 15,
-  "max_checks": 4,
+  "check_interval_sec": 30,
+  "max_checks": 3,
   "base_percent": 1.0,
   "min_balance_for_percent": 100,
-  "fixed_steps": [1.0, 2.0, 4.0, 8.0],
+  "fixed_steps": [
+    1.0,
+    2.0,
+    4.0,
+    8.0
+  ],
   "payout_min": 85,
   "payout_max": 92,
+  "payout_min_otc": 85,
+  "payout_max_otc": 92,
+  "payout_min_real": 75,
+  "payout_max_real": 92,
   "payout_recheck_sec": 1800,
+  "include_real": true,
+  "real_asset_types": [
+    "currency"
+  ],
+  "timezone": "Europe/Moscow",
+  "forex_trade_days": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
   "min_confirmations": 3,
   "rsi_overbought": 75,
   "rsi_oversold": 25,
@@ -23,5 +44,20 @@
   "tf_10m_overbought": 75,
   "tf_10m_oversold": 25,
   "skip_before_change_plus": 5,
-  "skip_before_change_minus": 1
+  "skip_before_change_minus": 3,
+  "max_drawdown_percent": 30,
+  "drawdown_pause_sec": 1800,
+  "drawdown_max_count": 2,
+  "news_enabled": true,
+  "news_importance_min": 2,
+  "news_pre_pause_min": 10,
+  "news_post_pause_min": 20,
+  "news_currencies": [
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY"
+  ],
+  "news_refresh_hours": 4,
+  "news_fallback_stop": true
 }

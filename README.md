@@ -46,7 +46,7 @@
 
 Склонировать репозиторий:
 
-    git clone https://github.com/murachour/pocketoption-analyzer-bot.git
+    git clone https://github.com/murashcour/pocketoption-analyzer-bot.git
     cd pocketoption-analyzer-bot
 
 Создать виртуальное окружение:
@@ -91,7 +91,7 @@ MIT License
 
 ## Автор
 
-murachour — https://github.com/murachour
+murashcour — https://github.com/murashcour
 
 Проект создан с помощью DeepSeek AI.
 
