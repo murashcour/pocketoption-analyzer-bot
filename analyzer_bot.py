@@ -1333,48 +1333,102 @@ class Trader:
 # ==================== INTERACTIVE MENU ====================
 # Поля, которые можно менять через меню
 
+# Формат: (key, ru_description, en_description)
 MENU_FIELDS = [
-    # Основные
-    ("expiration", "Экспирация (сек)"),
-    ("check_interval_sec", "Интервал проверок (сек)"),
-    ("max_checks", "Макс. проверок ступеней"),
-    ("base_percent", "Базовый % от баланса"),
-    ("min_balance_for_percent", "Порог баланса для %"),
-    # Payout OTC
-    ("payout_min_otc", "Мин. payout OTC (%)"),
-    ("payout_max_otc", "Макс. payout OTC (%)"),
-    # Payout Real
-    ("payout_min_real", "Мин. payout Real (%)"),
-    ("payout_max_real", "Макс. payout Real (%)"),
-    ("payout_recheck_sec", "Перепроверка payout (сек)"),
-    # Real-пары
-    ("include_real", "Включать Real-пары"),
-    ("real_asset_types", "Типы Real (currency)"),
-    ("timezone", "Часовой пояс"),
-    ("forex_trade_days", "Дни Forex (0=Пн)"),
-    # Анализ 1м
-    ("min_confirmations", "Мин. подтверждений"),
-    ("rsi_overbought", "RSI перекуп"),
-    ("rsi_oversold", "RSI перепрод"),
-    ("rsi_bull_min", "RSI бычий порог"),
-    ("rsi_bear_max", "RSI медвежий порог"),
-    # S/R, ATR
-    ("sr_lookback", "S/R lookback (свечей)"),
-    ("sr_proximity_percent", "S/R близость (%)"),
-    ("atr_period", "ATR период"),
-    ("atr_min_percent", "ATR мин. (%)"),
-    # Мульти-ТФ
-    ("tf_3m_rsi_bull", "3м RSI бычий"),
-    ("tf_3m_rsi_bear", "3м RSI медвежий"),
-    ("tf_3m_neutral_blocks", "3м нейтральный блок"),
-    ("tf_10m_overbought", "10м RSI перекуп"),
-    ("tf_10m_oversold", "10м RSI перепрод"),
-    # Пропуски
-    ("skip_before_change_plus", "Пропусков после +"),
-    ("skip_before_change_minus", "Пропусков после -"),
+    # ==================== Основные ====================
+    ("expiration",                "Экспирация сделки (сек)",              "Trade expiration (sec)"),
+    ("check_interval_sec",        "Интервал проверки серии (сек)",        "Series check interval (sec)"),
+    ("max_checks",                "Макс. проверок в серии",               "Max checks in series"),
+    ("base_percent",              "Базовый % от баланса",                 "Base % of balance"),
+    ("min_balance_for_percent",   "Мин. баланс для %-режима ($)",         "Min balance for % mode ($)"),
+
+    # ==================== Payout OTC ====================
+    ("payout_min_otc",            "Мин. payout OTC (%)",                  "Min OTC payout (%)"),
+    ("payout_max_otc",            "Макс. payout OTC (%)",                 "Max OTC payout (%)"),
+
+    # ==================== Payout Real ====================
+    ("payout_min_real",           "Мин. payout Real (%)",                 "Min Real payout (%)"),
+    ("payout_max_real",           "Макс. payout Real (%)",                "Max Real payout (%)"),
+
+    # ==================== Общие payout ====================
+    ("payout_recheck_sec",        "Перепроверка payout (сек)",            "Payout recheck (sec)"),
+
+    # ==================== Real-пары ====================
+    ("include_real",              "Включать Real-пары (True/False)",      "Include Real pairs (True/False)"),
+    ("real_asset_types",          "Типы Real (currency)",                 "Real types (currency)"),
+    ("timezone",                  "Часовой пояс (Europe/Moscow)",         "Timezone (Europe/Moscow)"),
+    ("forex_trade_days",          "Дни Forex (0=Пн..4=Пт)",               "Forex days (0=Mon..4=Fri)"),
+
+    # ==================== Анализ 1м ====================
+    ("min_confirmations",         "Мин. подтверждений сигнала",           "Min signal confirmations"),
+    ("rsi_overbought",            "RSI перекуп (>X — пропуск)",           "RSI overbought (>X — skip)"),
+    ("rsi_oversold",              "RSI перепрод (<X — пропуск)",          "RSI oversold (<X — skip)"),
+    ("rsi_bull_min",              "RSI бычий порог (>X — CALL)",          "RSI bullish min (>X — CALL)"),
+    ("rsi_bear_max",              "RSI медвежий порог (<X — PUT)",        "RSI bearish max (<X — PUT)"),
+
+    # ==================== S/R ====================
+    ("sr_lookback",               "S/R lookback (свечей)",                "S/R lookback (candles)"),
+    ("sr_proximity_percent",      "S/R близость к уровню (%)",            "S/R proximity to level (%)"),
+
+    # ==================== Волатильность ====================
+    ("atr_period",                "ATR период",                           "ATR period"),
+    ("atr_min_percent",           "ATR мин. волатильность (%)",           "ATR min volatility (%)"),
+
+    # ==================== Мульти-ТФ ====================
+    ("tf_3m_rsi_bull",            "3м RSI бычий порог",                   "3m RSI bullish threshold"),
+    ("tf_3m_rsi_bear",            "3м RSI медвежий порог",                "3m RSI bearish threshold"),
+    ("tf_3m_neutral_blocks",      "3м нейтральный блокирует (True/False)", "3m neutral blocks (True/False)"),
+    ("tf_10m_overbought",         "10м RSI перекуп",                      "10m RSI overbought"),
+    ("tf_10m_oversold",           "10м RSI перепрод",                     "10m RSI oversold"),
+
+    # ==================== Пропуски ====================
+    ("skip_before_change_plus",   "Пропусков после +серии",               "Skips after winning series"),
+    ("skip_before_change_minus",  "Пропусков после -серии",               "Skips after losing series"),
+
+    # ==================== Просадка ====================
+    ("max_drawdown_percent",      "Макс. просадка (%)",                   "Max drawdown (%)"),
+    ("drawdown_pause_sec",        "Пауза при просадке (сек)",             "Drawdown pause (sec)"),
+    ("drawdown_max_count",        "Макс. кол-во просадок",                "Max drawdown count"),
+
+    # ==================== Новости ====================
+    ("news_enabled",              "Пауза при новостях (True/False)",      "News pause enabled (True/False)"),
+    ("news_importance_min",       "Мин. важность (2=Medium,3=High)",      "Min importance (2=Med, 3=High)"),
+    ("news_pre_pause_min",        "Пауза ДО новости (мин)",               "Pre-news pause (min)"),
+    ("news_post_pause_min",       "Пауза ПОСЛЕ новости (мин)",            "Post-news pause (min)"),
+    ("news_currencies",           "Валюты новостей (USD,EUR..)",          "News currencies (USD,EUR..)"),
+    ("news_refresh_hours",        "Обновление календаря (часы)",          "Calendar refresh (hours)"),
+    ("news_fallback_stop",        "СТОП если календарь не загружен",      "STOP if calendar not loaded"),
 ]
 
+def _format_value(val) -> str:
+    """Форматирует значение для отображения."""
+    if isinstance(val, bool):
+        return "True" if val else "False"
+    if isinstance(val, list):
+        return "[" + ", ".join(str(x) for x in val) + "]"
+    return str(val)
+
+
 def show_settings_menu(cfg: dict):
+    """Показывает текущие настройки (двуязычное меню)."""
+    W = 100  # ширина разделителя
+    print("\n" + "=" * W)
+    print("  ТЕКУЩИЕ НАСТРОЙКИ / CURRENT SETTINGS")
+    print("=" * W)
+    print(f"  {'#':>3}  {'Параметр / Parameter':<28}  {'Значение':<14}  Описание / Description")
+    print("-" * W)
+    for i, (key, ru_desc, en_desc) in enumerate(MENU_FIELDS, 1):
+        val = _format_value(cfg.get(key, "?"))
+        # Строка вида:
+        #  [ 1]  expiration                    = 60              Экспирация сделки (сек) / Trade expiration (sec)
+        print(f"  [{i:2d}]  {key:<28}  = {val:<12}  {ru_desc} / {en_desc}")
+    print("=" * W)
+    print("  Номер / Number    — изменить параметр / change parameter")
+    print("  Enter             — запустить торговлю / start trading")
+    print("  r                 — сбросить на дефолты / reset to defaults")
+    print("  q                 — выход / exit")
+    print("=" * W)
+
     """Показывает текущие настройки."""
     print("\n" + "=" * 60)
     print("  ТЕКУЩИЕ НАСТРОЙКИ")
@@ -1390,7 +1444,36 @@ def show_settings_menu(cfg: dict):
     print("=" * 60)
 
 
-def change_parameter(cfg: dict, key: str, current_value):
+def change_parameter(cfg: dict, key: str, current_value, ru_desc: str = "", en_desc: str = ""):
+    """Меняет один параметр (двуязычный)."""
+    print(f"\n  ┌─ {key}")
+    if ru_desc:
+        print(f"  │  RU: {ru_desc}")
+    if en_desc:
+        print(f"  │  EN: {en_desc}")
+    print(f"  │  Текущее / Current: {_format_value(current_value)}")
+
+    # Подсказка по типу
+    if isinstance(current_value, bool):
+        hint = "True/False (или y/n, да/нет)"
+    elif isinstance(current_value, list):
+        hint = "через запятую, напр.: 1, 2, 4, 8"
+    elif isinstance(current_value, int):
+        hint = "целое число"
+    elif isinstance(current_value, float):
+        hint = "число (можно с точкой)"
+    else:
+        hint = "строка"
+    print(f"  │  Формат / Format: {hint}")
+    print(f"  └─ Enter = отмена / cancel")
+
+    new_val_str = input(f"  > ").strip()
+    if not new_val_str:
+        print("  Отменено / Cancelled")
+        return current_value
+
+    # ... остальное без изменений
+
     """Меняет один параметр."""
     print(f"\n  Текущее значение {key} = {current_value}")
     new_val_str = input(f"  Новое значение (Enter=отмена): ").strip()
@@ -1443,9 +1526,9 @@ def settings_menu(cfg: dict) -> dict:
         try:
             idx = int(choice) - 1
             if 0 <= idx < len(MENU_FIELDS):
-                key, _ = MENU_FIELDS[idx]
+                key, ru_desc, en_desc = MENU_FIELDS[idx]
                 if key in cfg:
-                    change_parameter(cfg, key, cfg[key])
+                    change_parameter(cfg, key, cfg[key], ru_desc, en_desc)
                 else:
                     print(f"  ⚠️ Параметр {key} отсутствует в конфиге")
             else:
