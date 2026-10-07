@@ -1,5 +1,6 @@
 Пошагово инструкция для развёртывания бота на Debian-based сервере.
 Рекомендуется: Ubuntu 24.04.5 LTS (проверено).
+
 ## Что делает бот
 
 - 📊 Мульти-таймфрейм анализ: 1м + 3м + 10м
@@ -152,7 +153,7 @@
 ## Шаг 2. Клонирование репозитория
 
     cd ~
-    git clone https://github.com/murashcour/pocketoption-analyzer-bot.git bot
+    git clone https://github.com/murachour/pocketoption-analyzer-bot.git bot
     cd bot
 
 ## Шаг 3. Виртуальное окружение
