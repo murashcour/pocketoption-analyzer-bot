@@ -1429,20 +1429,6 @@ def show_settings_menu(cfg: dict):
     print("  q                 — выход / exit")
     print("=" * W)
 
-    """Показывает текущие настройки."""
-    print("\n" + "=" * 60)
-    print("  ТЕКУЩИЕ НАСТРОЙКИ")
-    print("=" * 60)
-    for i, (key, desc) in enumerate(MENU_FIELDS, 1):
-        val = cfg.get(key, "?")
-        print(f"  [{i:2d}]  {key:28s} = {val}")
-    print("=" * 60)
-    print("  Номер     — изменить параметр")
-    print("  Enter     — запустить торговлю")
-    print("  r         — сбросить на дефолты")
-    print("  q         — выход")
-    print("=" * 60)
-
 
 def change_parameter(cfg: dict, key: str, current_value, ru_desc: str = "", en_desc: str = ""):
     """Меняет один параметр (двуязычный)."""
@@ -1472,15 +1458,6 @@ def change_parameter(cfg: dict, key: str, current_value, ru_desc: str = "", en_d
         print("  Отменено / Cancelled")
         return current_value
 
-    # ... остальное без изменений
-
-    """Меняет один параметр."""
-    print(f"\n  Текущее значение {key} = {current_value}")
-    new_val_str = input(f"  Новое значение (Enter=отмена): ").strip()
-    if not new_val_str:
-        print("  Отменено")
-        return current_value
-
     # Определяем тип по текущему значению
     try:
         if isinstance(current_value, bool):
@@ -1490,15 +1467,17 @@ def change_parameter(cfg: dict, key: str, current_value, ru_desc: str = "", en_d
         elif isinstance(current_value, float):
             new_val = float(new_val_str)
         elif isinstance(current_value, list):
-            # Список (fixed_steps)
             parts = [x.strip() for x in new_val_str.split(",")]
-            new_val = [float(x) for x in parts]
+            if current_value and isinstance(current_value[0], (int, float)):
+                new_val = [float(x) for x in parts]
+            else:
+                new_val = parts
         else:
             new_val = new_val_str
 
         cfg[key] = new_val
         save_config(cfg)
-        print(f"  ✅ {key} = {new_val}")
+        print(f"  ✅ {key} = {_format_value(new_val)}")
         logger.info(f"Настройка изменена: {key} = {new_val}")
         return new_val
     except Exception as e:
