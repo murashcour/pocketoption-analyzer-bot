@@ -1282,7 +1282,7 @@ class Trader:
                         if self.state.on_skip() == "CHANGE_PAIR":
                             await self.stopper.sleep(2)   # ← sleep при CHANGE_PAIR
                             continue
-                        await self.stopper.sleep(20)
+                        await self.stopper.sleep(5)
                         continue
                     else:
                         self.empty_candles_count = 0   # ← СБРОС при успехе
