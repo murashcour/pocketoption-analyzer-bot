@@ -331,10 +331,15 @@ def analyze_1m(candles: List) -> Optional[str]:
     if bear >= mc and bear > bull and bear < total:
         logger.info(f"   [1м] PUT | {bear}/{total}")
         return "PUT"
-    if bull == total or bear == total:
-        logger.info(f"   [1м] Перегрев {bull}/{total}")
-    else:
-        logger.info(f"   [1м] Нет ({bull}/{bear})")
+    # 5/5 — сильный сигнал, а не перегрев (для тестов)
+    if bull == total and bull >= mc:
+        logger.info(f"   [1м] CALL | {bull}/{total} (все!)")
+        return "CALL"
+    if bear == total and bear >= mc:
+        logger.info(f"   [1м] PUT | {bear}/{total} (все!)")
+        return "PUT"
+
+    logger.info(f"   [1м] Нет ({bull}/{bear})")
     return None
 
 
@@ -423,19 +428,22 @@ def check_volatility(candles: List, price: float) -> Tuple[bool, str]:
 
 # ==================== ПОЛНЫЙ АНАЛИЗ ====================
 # ==================== FULL ANALYSIS ====================
+
 async def full_analysis(client, pair: str) -> Optional[str]:
     """Мульти-ТФ анализ: 1м + 3м + 10м + S/R + ATR."""
+    # ===== БЫСТРАЯ ПРОВЕРКА: ТОЛЬКО 1м =====
     c1 = await fetch_candles(client, pair, 60, 100)
-    c3 = await fetch_candles(client, pair, 180, 100)
-    c10 = await fetch_candles(client, pair, 600, 50)
-
     if not c1 or len(c1) < 50:
         logger.info(f"   [{pair}] Мало данных 1м")
         return None
 
     sig_1m = analyze_1m(c1)
     if sig_1m is None:
-        return None
+        return None            # ← выходим БЕЗ загрузки 3м и 10м
+
+    # ===== 1м ДАЛ СИГНАЛ — грузим 3м и 10м =====
+    c3  = await fetch_candles(client, pair, 180, 100)
+    c10 = await fetch_candles(client, pair, 600, 50)
 
     price = get_close(c1[-1])
 
@@ -481,7 +489,6 @@ async def full_analysis(client, pair: str) -> Optional[str]:
 
     logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 3м + 10м + S/R + ATR OK)")
     return sig_1m
-
 
 # ==================== PAYOUT ====================
 # ==================== PAYOUT ====================
