@@ -929,6 +929,7 @@ class TraderState:
 
 # ==================== ЧЁРНЫЙ СПИСОК ЭКЗОТИКИ ====================
 # ==================== EXOTIC BLACKLIST ====================
+
 EXOTIC_BLACKLIST = {
     "TNDUSD_otc", "USDBRL_otc", "USDARS_otc", "SYPUSD_otc",
     "USDCLP_otc", "USDINR_otc", "USDPKR_otc", "USDBDT_otc",
@@ -936,6 +937,9 @@ EXOTIC_BLACKLIST = {
     "USDMYR_otc", "JODCNY_otc", "OMRCNY_otc", "SARCNY_otc",
     "AEDCNY_otc", "QARCNY_otc", "EURRUB_otc", "LBPUSD_otc",
     "ZARUSD_otc", "MADUSD_otc", "USDDZD_otc", "USDCOP_otc",
+    # Пары с ATR=0 (мёртвые свечи на OTC)
+    "USDCNH_otc", "EURTRY_otc", "USDIDR_otc", "BHDCNY_otc",
+    "IRRUSD_otc", "USDTHB_otc", "YERUSD_otc", "USDMXN_otc",
 }
 
 # ==================== НОВОСТИ (TRADINGVIEW) ====================
