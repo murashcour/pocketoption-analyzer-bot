@@ -429,17 +429,17 @@ def check_volatility(candles: List, price: float) -> Tuple[bool, str]:
 # ==================== ПОЛНЫЙ АНАЛИЗ ====================
 # ==================== FULL ANALYSIS ====================
 
-async def full_analysis(client, pair: str) -> Optional[str]:
-    """Мульти-ТФ анализ: 1м + 3м + 10м + S/R + ATR."""
+async def full_analysis(client, pair: str):
+    """Мульти-ТФ анализ: 1м + 3м + 10м + S/R + ATR. Возвращает (signal, price)."""
     # ===== БЫСТРАЯ ПРОВЕРКА: ТОЛЬКО 1м =====
     c1 = await fetch_candles(client, pair, 60, 100)
     if not c1 or len(c1) < 50:
         logger.info(f"   [{pair}] Мало данных 1м")
-        return None
+        return None, None
 
     sig_1m = analyze_1m(c1)
     if sig_1m is None:
-        return None            # ← выходим БЕЗ загрузки 3м и 10м
+        return None, None      # ← выходим БЕЗ загрузки 3м и 10м
 
     # ===== 1м ДАЛ СИГНАЛ — грузим 3м и 10м =====
     c3  = await fetch_candles(client, pair, 180, 100)
@@ -451,7 +451,7 @@ async def full_analysis(client, pair: str) -> Optional[str]:
     ok_vol, msg_vol = check_volatility(c1, price)
     logger.info(f"   [Волатильность] {msg_vol}")
     if not ok_vol:
-        return None
+        return None, None
 
     # S/R
     support, resistance = find_support_resistance(c1)
@@ -459,7 +459,7 @@ async def full_analysis(client, pair: str) -> Optional[str]:
     logger.info(f"   [S/R] {msg_sr}")
     if not ok_sr:
         logger.info(f"   [{pair}] S/R блокирует сделку")
-        return None
+        return None, None
 
     # 3м
     if c3 and len(c3) >= 30:
@@ -467,11 +467,11 @@ async def full_analysis(client, pair: str) -> Optional[str]:
         if sig_3m is None:
             if CFG["tf_3m_neutral_blocks"]:
                 logger.info(f"   [3м] нейтрально — блокирую")
-                return None
+                return None, None
             logger.info(f"   [3м] нейтрально — пропускаю")
         elif sig_3m != sig_1m:
             logger.info(f"   [3м] {sig_3m} — конфликт с 1м ({sig_1m})")
-            return None
+            return None, None
         else:
             logger.info(f"   [3м] {sig_3m} — совпадает с 1м ✓")
     else:
@@ -483,12 +483,12 @@ async def full_analysis(client, pair: str) -> Optional[str]:
         logger.info(f"   [{msg}]")
         if not ok:
             logger.info(f"   [{pair}] 10м блокирует сделку")
-            return None
+            return None, None
     else:
         logger.info(f"   [{pair}] 10м мало данных")
 
-    logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 3м + 10м + S/R + ATR OK)")
-    return sig_1m
+    logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 3м + 10м + S/R + ATR OK) @ {price}")
+    return sig_1m, price
 
 # ==================== PAYOUT ====================
 # ==================== PAYOUT ====================
@@ -589,7 +589,7 @@ class StopChecker:
 
 # ==================== СЕРИЯ С УДВОЕНИЕМ ====================
 # ==================== MARTINGALE SERIES ====================
-async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state) -> bool:
+async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
     Серия с удвоением (новая логика):
     - 1-я сделка $1 → проверка через 30 сек
@@ -630,7 +630,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     open_deals.append({
         "id": trade_id,
         "pair": pair,
-        "entry": 0,
+        "entry": entry_price,
         "amount": bet,
         "signal": signal,
         "open_time": time.time(),
@@ -739,7 +739,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
                     continue
 
                 # Проверка сигнала
-                signal_3 = await full_analysis(client, pair_3)
+                signal_3, entry_price_3 = await full_analysis(client, pair_3)
                 if signal_3 is not None:
                     logger.info(f"   ✅ Найден сигнал на {pair_3}: {signal_3}")
                     break
@@ -1315,7 +1315,7 @@ class Trader:
                         logger.info(f"💹 [{pair}] Payout {live_payout:.1f}% — OK")
 
                                       # Анализ
-                    signal = await full_analysis(client, pair)
+                    signal, entry_price = await full_analysis(client, pair)
                     if signal is None:
                         # Счётчик "Мало данных"
                         self.empty_candles_count += 1
@@ -1335,7 +1335,7 @@ class Trader:
 
                     self.state.skip_streak = 0
                     is_win = await run_martingale_series(
-                        client, pair, signal, self.stopper, self.state
+                        client, pair, signal, self.stopper, self.state, entry_price
                     )
 
                     if is_win:
