@@ -615,17 +615,14 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     open_deals = []
 
     # ==================== СТУПЕНЬ 1 ====================
-    current_price = await get_current_price(client, pair)
-    if current_price is None:
-        logger.error("❌ Не удалось получить цену")
-        return False
-
     bet = steps[0]
+    t0 = time.time()
     try:
         if signal == "CALL":
             trade_id, _ = await client.buy(pair, bet, CFG["expiration"])
         else:
             trade_id, _ = await client.sell(pair, bet, CFG["expiration"])
+        dt = time.time() - t0
     except Exception as e:
         logger.error(f"❌ Ошибка открытия ${bet}: {e}")
         return False
@@ -633,12 +630,12 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     open_deals.append({
         "id": trade_id,
         "pair": pair,
-        "entry": current_price,
+        "entry": 0,
         "amount": bet,
         "signal": signal,
         "open_time": time.time(),
     })
-    logger.info(f"📈 [1/3] Открыл ${bet:.2f} {direction_str} @ {current_price}")
+    logger.info(f"📈 [1/3] Открыл ${bet:.2f} {direction_str} (за {dt:.2f} сек)")
 
     # ==================== ПРОВЕРКА 1 (через 30 сек) ====================
     await asyncio.sleep(CFG["check_interval_sec"])
@@ -663,17 +660,14 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     # ==================== СТУПЕНЬ 2 (если 1-я в минусе) ====================
     if not first_in_profit:
         # 2-я сделка
-        current_price = await get_current_price(client, pair)
-        if current_price is None:
-            logger.error("❌ Не удалось получить цену для 2-й")
-            return False
-
         bet = steps[1]
+        t0 = time.time()
         try:
             if signal == "CALL":
                 trade_id, _ = await client.buy(pair, bet, CFG["expiration"])
             else:
                 trade_id, _ = await client.sell(pair, bet, CFG["expiration"])
+            dt = time.time() - t0
         except Exception as e:
             logger.error(f"❌ Ошибка открытия ${bet}: {e}")
             return False
@@ -681,12 +675,12 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         open_deals.append({
             "id": trade_id,
             "pair": pair,
-            "entry": current_price,
+            "entry": 0,
             "amount": bet,
             "signal": signal,
             "open_time": time.time(),
         })
-        logger.info(f"📈 [2/3] Открыл ${bet:.2f} {direction_str} @ {current_price}")
+        logger.info(f"📈 [2/3] Открыл ${bet:.2f} {direction_str} (за {dt:.2f} сек)")
 
         # ==================== ЖДЁМ ЗАКРЫТИЯ 2-х СДЕЛОК ====================
         # Ждём закрытия последней (2-й) + запас
@@ -763,17 +757,14 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
 
             # ==================== СТУПЕНЬ 3 ====================
             direction_3 = "ВВЕРХ ⬆️ (CALL)" if signal_3 == "CALL" else "ВНИЗ ⬇️ (PUT)"
-            current_price = await get_current_price(client, pair_3)
-            if current_price is None:
-                logger.error("❌ Не удалось получить цену для 3-й")
-                return False
-
             bet = steps[2]  # $4
+            t0 = time.time()
             try:
                 if signal_3 == "CALL":
                     trade_id, _ = await client.buy(pair_3, bet, CFG["expiration"])
                 else:
                     trade_id, _ = await client.sell(pair_3, bet, CFG["expiration"])
+                dt = time.time() - t0
             except Exception as e:
                 logger.error(f"❌ Ошибка открытия ${bet}: {e}")
                 return False
@@ -781,12 +772,12 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
             open_deals.append({
                 "id": trade_id,
                 "pair": pair_3,
-                "entry": current_price,
+                "entry": 0,
                 "amount": bet,
                 "signal": signal_3,
                 "open_time": time.time(),
             })
-            logger.info(f"📈 [3/3] Открыл ${bet:.2f} {direction_3} @ {current_price} на {pair_3}")
+            logger.info(f"📈 [3/3] Открыл ${bet:.2f} {direction_3} на {pair_3} (за {dt:.2f} сек)")
 
             # ==================== ЖДЁМ ЗАКРЫТИЯ 3-й ====================
             last_open_time = open_deals[-1]["open_time"]
@@ -1162,6 +1153,7 @@ class Trader:
         self.initial_balance = 0.0
         self.reference_balance = 0.0
         self.drawdown_count = 0
+        self.last_status_show = 0.0   # показ REF/BAL раз в 5 мин
 
     async def run(self):
         async with PocketOptionAsync(ssid=self.ssid) as client:
@@ -1210,35 +1202,78 @@ class Trader:
                     if self.stopper.requested():
                         break
 
-                    # === ПРОВЕРКА ПРОСАДКИ ===
+                     # === ПРОВЕРКА ПРОСАДКИ ===
                     try:
                         current_balance = float(await client.balance())
-                        threshold = self.reference_balance * (
-                            1 - CFG["max_drawdown_percent"] / 100
-                        )
-                        if current_balance < threshold:
-                            self.drawdown_count += 1
+
+                        # Санитарная проверка — защита от бага API
+                        if current_balance < 0:
                             logger.warning(
-                                f"🛑 ПРОСАДКА #{self.drawdown_count} "
-                                f"({CFG['max_drawdown_percent']}%): "
-                                f"${self.reference_balance:.2f} → ${current_balance:.2f}"
+                                f"⚠️ Баланс отрицательный (${current_balance:.2f}) — "
+                                f"вероятно, баг API. Пропускаю проверку просадки."
                             )
-                            if self.drawdown_count >= CFG["drawdown_max_count"]:
-                                logger.error(
-                                    f"🛑 Достигнут лимит просадок "
-                                    f"({CFG['drawdown_max_count']}) — СТОП"
+                        elif current_balance > self.reference_balance * 3:
+                            logger.warning(
+                                f"⚠️ Баланс подозрительно большой "
+                                f"(${current_balance:.2f} при reference "
+                                f"${self.reference_balance:.2f}) — пропускаю проверку."
+                            )
+                        else:
+                            # === REFERENCE UPDATE (+10%) ===
+                            if current_balance >= self.reference_balance * 1.10:
+                                old_ref = self.reference_balance
+                                self.reference_balance = current_balance
+                                logger.info(
+                                    f"📈 Reference обновлён: "
+                                    f"${old_ref:.2f} → ${current_balance:.2f} (+10%)"
                                 )
-                                return
-                            pause_sec = CFG["drawdown_pause_sec"]
-                            logger.info(f"⏸ Пауза {pause_sec//60} мин...")
-                            await self.stopper.sleep(pause_sec)
-                            self.reference_balance = current_balance
-                            logger.info(
-                                f"✅ После паузы. Новый reference: "
-                                f"${self.reference_balance:.2f}"
+
+                            # === ПРОВЕРКА ПРОСАДКИ ===
+                            threshold = self.reference_balance * (
+                                1 - CFG["max_drawdown_percent"] / 100
                             )
+                            if current_balance < threshold:
+                                self.drawdown_count += 1
+                                logger.warning(
+                                    f"🛑 ПРОСАДКА #{self.drawdown_count} "
+                                    f"({CFG['max_drawdown_percent']}%): "
+                                    f"${self.reference_balance:.2f} → ${current_balance:.2f}"
+                                )
+                                if self.drawdown_count >= CFG["drawdown_max_count"]:
+                                    logger.error(
+                                        f"🛑 Достигнут лимит просадок "
+                                        f"({CFG['drawdown_max_count']}) — СТОП"
+                                    )
+                                    return
+                                pause_sec = CFG["drawdown_pause_sec"]
+                                logger.info(f"⏸ Пауза {pause_sec//60} мин...")
+                                await self.stopper.sleep(pause_sec)
+                                self.reference_balance = current_balance
+                                logger.info(
+                                    f"✅ После паузы. Новый reference: "
+                                    f"${self.reference_balance:.2f}"
+                                )
                     except Exception as e:
                         logger.debug(f"Ошибка проверки просадки: {e}")
+
+                    # === ПОКАЗ REF/BAL КАЖДЫЕ 5 МИН ===
+                    if time.time() - self.last_status_show >= 300:
+                        try:
+                            _bal_now = float(await client.balance())
+                            _threshold = self.reference_balance * (
+                                1 - CFG["max_drawdown_percent"] / 100
+                            )
+                            _msg = (
+                                f"💰 Reference: ${self.reference_balance:.2f} | "
+                                f"Текущий: ${_bal_now:.2f} | "
+                                f"Порог просадки: ${_threshold:.2f}"
+                            )
+                            logger.info(_msg)
+                            # Синий цвет в консоль
+                            print(f"\033[94m{_msg}\033[0m")
+                        except Exception as e:
+                            logger.debug(f"Ошибка показа REF/BAL: {e}")
+                        self.last_status_show = time.time()
 
                     # === ПРОВЕРКА НОВОСТЕЙ ===
                     news_pause, news_wait, news_event = check_news_pause()
