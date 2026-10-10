@@ -634,7 +634,14 @@ async def _check_momentum_5s(client, pair: str, signal: str, entry_price: float)
 
         # 2. 5с свечи (берём 3, используем предпоследнюю — закрытую)
         candle_sec = CFG.get("momentum_candle_seconds", 5)
-        candles_5s = await client.get_candles(pair, candle_sec, 3)
+        try:
+            candles_5s = await asyncio.wait_for(
+                client.get_candles(pair, candle_sec, 3),
+                timeout=3   # максимум 3 сек
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"   ⚠️ Таймаут 5с свечей (>3 сек) — пропускаю momentum check")
+            return True   # не блокируем при таймауте
         if not candles_5s or len(candles_5s) < 2:
             logger.warning(f"   ⚠️ Мало 5с свечей — пропускаю momentum check")
             return True   # не блокируем
