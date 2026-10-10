@@ -726,60 +726,129 @@ async def _check_first_30s(client, pair: str, signal: str, entry_price: float):
         logger.error(f"❌ Ошибка T+30 проверки: {e}")
         return "STEP2_NOW"   # при ошибке — открываем 2-ю (безопаснее)
 
+
 async def _open_step_1(client, pair: str, signal: str, entry_price: float,
-                        steps: list, stopper):
+                        steps: list, stopper, state=None):
     """
     Полный вход 1-й ступени.
-    Возвращает (deal, entry_price) или (None, None) при пропуске.
+    Если momentum против — ИЩЕМ СНОВА (другая пара).
+    Возвращает (deal, entry_price) или (None, None) при остановке.
     """
-    # 1. Ждать начало 1м свечи
-    if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-        return None, None
+    pass_number = 0
+    pairs_tried = 0
+    max_pairs = len(state.pairs) if state else 20
+    start_time = time.time()
+    last_log_time = start_time
 
-    # 2. Задержка (0 = без задержки по умолчанию)
-    human_delay = CFG.get("human_delay_sec", 0)
-    if human_delay > 0:
-        logger.info(f"   ⏱ Задержка {human_delay} сек...")
-        await stopper.sleep(human_delay)
+    while True:
+        if stopper.requested():
+            return None, None
 
-    # 3. Momentum check
-    ok = await _check_momentum(client, pair, signal, entry_price)
-    if not ok:
-        logger.info(f"   ⏸ Пропуск: momentum против")
-        return None, None
+        # Progress каждые 5 минут
+        if time.time() - last_log_time >= 300:
+            elapsed_min = (time.time() - start_time) / 60
+            logger.info(
+                f"   🔍 Ищу 1-ю: круг {pass_number+1}, "
+                f"пар {pairs_tried}, время {elapsed_min:.0f} мин"
+            )
+            last_log_time = time.time()
 
-    # 4. Открыть
-    deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper)
-    if deal is None:
-        return None, None
+        # 1. Ждать начало 1м свечи
+        if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+            return None, None
 
-    deal["entry"] = entry_price
-    return deal, entry_price
+        # 2. Momentum check
+        ok = await _check_momentum(client, pair, signal, entry_price)
+        if not ok:
+            logger.info(f"   ⏸ Momentum против {pair} — меняю пару")
+            if state is not None:
+                state.change_pair("1-я momentum против")
+                pair = state.current_pair()
+                pairs_tried += 1
+
+                live_payout = await check_payout(client, pair)
+                pmin, pmax = get_payout_range(pair)
+                if live_payout is None or live_payout < pmin or live_payout > pmax:
+                    await stopper.sleep(2)
+                    if pairs_tried >= max_pairs:
+                        pass_number += 1
+                        await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                        pairs_tried = 0
+                    continue
+
+                new_sig, new_entry = await full_analysis(client, pair)
+                if new_sig is not None:
+                    signal, entry_price = new_sig, new_entry
+                    continue
+            await stopper.sleep(2)
+
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        # 3. Открыть
+        deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper)
+        if deal is None:
+            logger.warning(f"   ⚠️ Ошибка открытия — повтор через 5 сек")
+            await stopper.sleep(5)
+            continue
+
+        deal["entry"] = entry_price
+        return deal, entry_price
+
 
 async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
                         with_analysis: bool = False, state=None):
     """
     2-я ступень.
-    with_analysis=False → открыть сразу (вариант A).
-    with_analysis=True  → полный анализ (вариант B: как 1-я).
+    with_analysis=False → СРАЗУ (без анализа).
+    with_analysis=True  → С АНАЛИЗОМ + цикл до открытия.
     Возвращает deal или None.
     """
     if not with_analysis:
-        # === Вариант A: СРАЗУ ===
-        logger.info(f"   📈 2-я ступень СРАЗУ (момент минус, без анализа)")
+        # === Вариант A: СРАЗУ (без анализа, без цикла) ===
+        logger.info(f"   📈 2-я ступень СРАЗУ (момент минус)")
         deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper)
         return deal
-    else:
-        # === Вариант B: С ПОЛНЫМ АНАЛИЗОМ ===
-        logger.info(f"   📈 2-я ступень с ПОЛНЫМ АНАЛИЗОМ")
 
-        # Ищем сигнал (новый анализ)
+    # === Вариант B: С АНАЛИЗОМ + цикл ===
+    logger.info(f"   📈 2-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+
+    pass_number = 0
+    pairs_tried = 0
+    max_pairs = len(state.pairs) if state else 20
+    start_time = time.time()
+    last_log_time = start_time
+
+    while True:
+        if stopper.requested():
+            return None
+
+        # Progress каждые 5 минут
+        if time.time() - last_log_time >= 300:
+            elapsed_min = (time.time() - start_time) / 60
+            logger.info(
+                f"   🔍 Ищу 2-ю: круг {pass_number+1}, "
+                f"пар {pairs_tried}, время {elapsed_min:.0f} мин"
+            )
+            last_log_time = time.time()
+
+        # Анализ
         new_signal, new_entry = await full_analysis(client, pair)
         if new_signal is None:
             logger.info(f"   ⏸ 2-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
                 state.change_pair("2-я нет сигнала")
-            return None
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
 
         logger.info(f"   ✅ 2-я (анализ): сигнал {new_signal} @ {new_entry}")
 
@@ -787,110 +856,102 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
         if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
             return None
 
-        # Задержка (0 = без задержки)
-        human_delay = CFG.get("human_delay_sec", 0)
-        if human_delay > 0:
-            logger.info(f"   ⏱ Задержка {human_delay} сек...")
-            await stopper.sleep(human_delay)
-
         # Momentum check
         ok = await _check_momentum(client, pair, new_signal, new_entry)
         if not ok:
-            logger.info(f"   ⏸ 2-я (анализ): momentum против — пропуск")
-            return None
+            logger.info(f"   ⏸ 2-я (анализ): momentum против — меняю пару")
+            if state is not None:
+                state.change_pair("2-я momentum против")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
 
         # Открыть
         deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper)
         if deal is None:
-            return None
+            logger.warning(f"   ⚠️ Ошибка открытия 2-й — повтор через 5 сек")
+            await stopper.sleep(5)
+            continue
         deal["entry"] = new_entry
         return deal
 
-async def _find_signal_for_step_3(client, stopper, state):
+
+async def _open_step_3(client, pair: str, signal: str, entry_price: float,
+                        steps: list, stopper, state=None):
     """
-    Ищет сигнал для 3-й ступени (независимо, как 1-я).
-    Возвращает (pair, signal, entry) или (None, None, None).
+    3-я ступень (полный вход как 1-я).
+    Если momentum против — ищем снова.
+    Возвращает deal или None.
     """
+    pass_number = 0
     pairs_tried = 0
-    max_pairs = len(state.pairs)
-    pass_num = 0
-    error_streak = 0
-    max_errors = CFG.get("max_error_streak", 5)
-    pause_sec = CFG.get("step3_pause_between_circles_sec", 30)
+    max_pairs = len(state.pairs) if state else 20
+    start_time = time.time()
+    last_log_time = start_time
 
     while True:
         if stopper.requested():
-            return None, None, None
+            return None
 
-        p = state.current_pair()
-        logger.info(f"   🔍 [{pass_num+1}-й круг] Ищу сигнал на {p}...")
+        # Progress каждые 5 минут
+        if time.time() - last_log_time >= 300:
+            elapsed_min = (time.time() - start_time) / 60
+            logger.info(
+                f"   🔍 Ищу 3-ю: круг {pass_number+1}, "
+                f"пар {pairs_tried}, время {elapsed_min:.0f} мин"
+            )
+            last_log_time = time.time()
 
-        try:
-            # Payout
-            live_payout = await check_payout(client, p)
-            pmin, pmax = get_payout_range(p)
-            if live_payout is None or live_payout < pmin or live_payout > pmax:
-                logger.info(f"   ⏸ {p}: payout {live_payout} — смена пары")
-                state.change_pair("payout вне диапазона")
+        # Ждать начало 1м свечи
+        if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+            return None
+
+        # Momentum check
+        ok = await _check_momentum(client, pair, signal, entry_price)
+        if not ok:
+            logger.info(f"   ⏸ 3-я: momentum против {pair} — меняю пару")
+            if state is not None:
+                state.change_pair("3-я momentum против")
+                pair = state.current_pair()
                 pairs_tried += 1
-                await stopper.sleep(2)
-                error_streak = 0   # успешная итерация
-            else:
-                # Анализ
-                sig, entry = await full_analysis(client, p)
-                if sig is not None:
-                    logger.info(f"   ✅ Найден сигнал на {p}: {sig} @ {entry}")
-                    return p, sig, entry
 
-                logger.info(f"   ⏸ {p}: нет сигнала — смена пары")
-                state.change_pair("нет сигнала")
-                pairs_tried += 1
-                await stopper.sleep(2)
-                error_streak = 0
-        except Exception as e:
-            error_streak += 1
-            logger.error(f"❌ Ошибка поиска #{error_streak}: {e}")
-            if error_streak >= max_errors:
-                logger.error(f"🛑 {max_errors} ошибок подряд — СТОП поиска")
-                return None, None, None
-            await stopper.sleep(5)
+                # Payout
+                live_payout = await check_payout(client, pair)
+                pmin, pmax = get_payout_range(pair)
+                if live_payout is None or live_payout < pmin or live_payout > pmax:
+                    await stopper.sleep(2)
+                    if pairs_tried >= max_pairs:
+                        pass_number += 1
+                        await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                        pairs_tried = 0
+                    continue
+
+                # Новый анализ
+                new_sig, new_entry = await full_analysis(client, pair)
+                if new_sig is not None:
+                    signal, entry_price = new_sig, new_entry
+                    continue
+            await stopper.sleep(2)
+
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
             continue
 
-        # Круг завершён
-        if pairs_tried >= max_pairs:
-            pass_num += 1
-            logger.info(f"   😴 Круг {pass_num} завершён — пауза {pause_sec} сек")
-            await stopper.sleep(pause_sec)
-            pairs_tried = 0
-
-async def _open_step_3(client, pair: str, signal: str, entry_price: float,
-                        steps: list, stopper):
-    """
-    3-я ступень (полный вход как 1-я).
-    Возвращает deal или None.
-    """
-    # 1. Ждать начало 1м свечи
-    if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-        return None
-
-    # 2. Задержка 3 сек
-    human_delay = CFG.get("human_delay_sec", 0)
-    if human_delay > 0:
-        logger.info(f"   ⏱ Задержка {human_delay} сек...")
-        await stopper.sleep(human_delay)
-
-    # 3. Momentum check
-    ok = await _check_momentum(client, pair, signal, entry_price)
-    if not ok:
-        logger.info(f"   ⏸ 3-я: momentum против — пропуск")
-        return None
-
-    # 4. Открыть $4 (step_idx=2)
-    deal = await _open_deal_raw(client, pair, 2, signal, steps, stopper)
-    if deal is None:
-        return None
-    deal["entry"] = entry_price
-    return deal
+        # Открыть $4
+        deal = await _open_deal_raw(client, pair, 2, signal, steps, stopper)
+        if deal is None:
+            logger.warning(f"   ⚠️ Ошибка открытия 3-й — повтор через 5 сек")
+            await stopper.sleep(5)
+            continue
+        deal["entry"] = entry_price
+        return deal
 
 
 async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
@@ -918,7 +979,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     logger.info(f"   Ступени: {steps}")
 
     # ===== ШАГ 1: 1-я ступень (полный вход) =====
-    deal_1, entry_1 = await _open_step_1(client, pair, signal, entry_price, steps, stopper)
+    deal_1, entry_1 = await _open_step_1(client, pair, signal, entry_price, steps, stopper, state=state)
     if deal_1 is None:
         logger.info(f"⏸ СЕРИЯ прервана: не удалось открыть 1-ю")
         return False
@@ -994,7 +1055,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         return False
 
     deal_3 = await _open_step_3(
-        client, pair_3, signal_3, entry_3, steps, stopper
+        client, pair_3, signal_3, entry_3, steps, stopper, state=state
     )
     if deal_3 is None:
         logger.info(f"❌ 3-я не открыта — серия закрыта")
