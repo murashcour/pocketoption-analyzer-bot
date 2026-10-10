@@ -611,77 +611,52 @@ async def _wait_candle_start(stopper, max_sec: int = 8) -> bool:
             logger.warning(f"   ⚠️ Не дождались начала свечи за 70 сек — продолжаю")
             return True
 
-async def _check_momentum_5s(client, pair: str, signal: str, entry_price: float) -> bool:
+
+async def _check_momentum(client, pair: str, signal: str, entry_price: float) -> bool:
     """
-    Проверка momentum через 1 закрытую 5с свечу + Δ цены vs entry_price.
-    Возвращает True (OK, можно открывать) или False (пропуск).
+    Проверка momentum через текущую цену vs entry_price (быстро).
+    Использует get_current_price (get_candles_live).
 
     Логика:
-    - CALL: 5с свеча растёт (Δ > 0) И цена выше entry
-    - PUT:  5с свеча падает (Δ < 0) И цена ниже entry
+    - CALL: current_price > entry_price → OK
+    - PUT:  current_price < entry_price → OK
     - Иначе — пропуск
     """
     if not CFG.get("momentum_enabled", True):
-        logger.info(f"   ⏸ Momentum отключён в config — пропускаю проверку")
+        logger.info(f"   ⏸ Momentum отключён в config")
         return True
 
     try:
-        # 1. Текущая цена
+        t0 = time.time()
         current_price = await get_current_price(client, pair)
-        if current_price is None:
-            logger.warning(f"   ⚠️ Цена не получена — momentum check fail")
-            return False
+        dt = time.time() - t0
 
-        # 2. 5с свечи (берём 3, используем предпоследнюю — закрытую)
-        candle_sec = CFG.get("momentum_candle_seconds", 5)
-        try:
-            candles_5s = await asyncio.wait_for(
-                client.get_candles(pair, candle_sec, 3),
-                timeout=3   # максимум 3 сек
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"   ⚠️ Таймаут 5с свечей (>3 сек) — пропускаю momentum check")
-            return True   # не блокируем при таймауте
-        if not candles_5s or len(candles_5s) < 2:
-            logger.warning(f"   ⚠️ Мало 5с свечей — пропускаю momentum check")
+        if current_price is None:
+            logger.warning(f"   ⚠ Цена не получена за {dt:.2f} сек — пропуск momentum")
             return True   # не блокируем
 
-        closed_candle = candles_5s[-2]
-        candle_open = get_open(closed_candle)
-        candle_close = get_close(closed_candle)
-        candle_delta = candle_close - candle_open
+        delta = current_price - entry_price
 
-        # 3. Δ цены vs entry
-        price_delta = current_price - entry_price
-
-        # Логирование
         logger.info(
-            f"   [Momentum] 5с свеча Δ={candle_delta:+.5f} | "
-            f"Цена entry={entry_price:.5f} → current={current_price:.5f} "
-            f"(Δ={price_delta:+.5f})"
+            f"   [Momentum] entry={entry_price:.5f} → current={current_price:.5f} "
+            f"(Δ={delta:+.5f}, за {dt:.2f} сек)"
         )
 
-        # 4. Проверка
         if signal == "CALL":
-            if candle_delta <= 0:
-                logger.info(f"   ⏸ 5с свеча против CALL (Δ {candle_delta:+.5f})")
-                return False
-            if price_delta <= 0:
-                logger.info(f"   ⏸ Цена против CALL (Δ {price_delta:+.5f})")
+            if delta <= 0:
+                logger.info(f"   ⏸ Цена против CALL (Δ {delta:+.5f})")
                 return False
         elif signal == "PUT":
-            if candle_delta >= 0:
-                logger.info(f"   ⏸ 5с свеча против PUT (Δ {candle_delta:+.5f})")
-                return False
-            if price_delta >= 0:
-                logger.info(f"   ⏸ Цена против PUT (Δ {price_delta:+.5f})")
+            if delta >= 0:
+                logger.info(f"   ⏸ Цена против PUT (Δ {delta:+.5f})")
                 return False
 
         logger.info(f"   ✅ Momentum OK — можно открывать")
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка momentum check: {e}")
-        return True   # при ошибке — не блокируем
+        return True   # не блокируем при ошибке
+
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper) -> Optional[dict]:
     """
@@ -761,14 +736,14 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
     if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
         return None, None
 
-    # 2. Задержка 3 сек (человеческая реакция)
-    human_delay = CFG.get("human_delay_sec", 3)
+    # 2. Задержка (0 = без задержки по умолчанию)
+    human_delay = CFG.get("human_delay_sec", 0)
     if human_delay > 0:
-        logger.info(f"   ⏱ Задержка {human_delay} сек (человеческая реакция)...")
+        logger.info(f"   ⏱ Задержка {human_delay} сек...")
         await stopper.sleep(human_delay)
 
     # 3. Momentum check
-    ok = await _check_momentum_5s(client, pair, signal, entry_price)
+    ok = await _check_momentum(client, pair, signal, entry_price)
     if not ok:
         logger.info(f"   ⏸ Пропуск: momentum против")
         return None, None
@@ -812,14 +787,14 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
         if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
             return None
 
-        # Задержка 3 сек
-        human_delay = CFG.get("human_delay_sec", 3)
+        # Задержка (0 = без задержки)
+        human_delay = CFG.get("human_delay_sec", 0)
         if human_delay > 0:
             logger.info(f"   ⏱ Задержка {human_delay} сек...")
             await stopper.sleep(human_delay)
 
         # Momentum check
-        ok = await _check_momentum_5s(client, pair, new_signal, new_entry)
+        ok = await _check_momentum(client, pair, new_signal, new_entry)
         if not ok:
             logger.info(f"   ⏸ 2-я (анализ): momentum против — пропуск")
             return None
@@ -899,13 +874,13 @@ async def _open_step_3(client, pair: str, signal: str, entry_price: float,
         return None
 
     # 2. Задержка 3 сек
-    human_delay = CFG.get("human_delay_sec", 3)
+    human_delay = CFG.get("human_delay_sec", 0)
     if human_delay > 0:
         logger.info(f"   ⏱ Задержка {human_delay} сек...")
         await stopper.sleep(human_delay)
 
     # 3. Momentum check
-    ok = await _check_momentum_5s(client, pair, signal, entry_price)
+    ok = await _check_momentum(client, pair, signal, entry_price)
     if not ok:
         logger.info(f"   ⏸ 3-я: momentum против — пропуск")
         return None
