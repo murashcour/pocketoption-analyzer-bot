@@ -586,20 +586,343 @@ class StopChecker:
                 return
             await asyncio.sleep(1)
 
-
 # ==================== СЕРИЯ С УДВОЕНИЕМ ====================
 # ==================== MARTINGALE SERIES ====================
+
+async def _wait_candle_start(stopper, max_sec: int = 8) -> bool:
+    """
+    Ждёт начала 1м свечи (когда прошло < max_sec секунд от HH:MM:00).
+    Возвращает True, если удалось; False, если stopper.requested().
+    """
+    start_wait = time.time()
+    while True:
+        if stopper.requested():
+            return False
+        # Секунд от начала текущей минуты
+        now = time.time()
+        seconds_into = now % 60
+        if seconds_into < max_sec:
+            logger.info(f"   ⏱ Начало 1м свечи ({seconds_into:.1f} сек от 00) — OK")
+            return True
+        # Ждём до следующей секунды
+        await asyncio.sleep(1)
+        # Защита от бесконечного ожидания
+        if time.time() - start_wait > 70:
+            logger.warning(f"   ⚠️ Не дождались начала свечи за 70 сек — продолжаю")
+            return True
+
+async def _check_momentum_5s(client, pair: str, signal: str, entry_price: float) -> bool:
+    """
+    Проверка momentum через 1 закрытую 5с свечу + Δ цены vs entry_price.
+    Возвращает True (OK, можно открывать) или False (пропуск).
+
+    Логика:
+    - CALL: 5с свеча растёт (Δ > 0) И цена выше entry
+    - PUT:  5с свеча падает (Δ < 0) И цена ниже entry
+    - Иначе — пропуск
+    """
+    if not CFG.get("momentum_enabled", True):
+        logger.info(f"   ⏸ Momentum отключён в config — пропускаю проверку")
+        return True
+
+    try:
+        # 1. Текущая цена
+        current_price = await get_current_price(client, pair)
+        if current_price is None:
+            logger.warning(f"   ⚠️ Цена не получена — momentum check fail")
+            return False
+
+        # 2. 5с свечи (берём 3, используем предпоследнюю — закрытую)
+        candle_sec = CFG.get("momentum_candle_seconds", 5)
+        candles_5s = await client.get_candles(pair, candle_sec, 3)
+        if not candles_5s or len(candles_5s) < 2:
+            logger.warning(f"   ⚠️ Мало 5с свечей — пропускаю momentum check")
+            return True   # не блокируем
+
+        closed_candle = candles_5s[-2]
+        candle_open = get_open(closed_candle)
+        candle_close = get_close(closed_candle)
+        candle_delta = candle_close - candle_open
+
+        # 3. Δ цены vs entry
+        price_delta = current_price - entry_price
+
+        # Логирование
+        logger.info(
+            f"   [Momentum] 5с свеча Δ={candle_delta:+.5f} | "
+            f"Цена entry={entry_price:.5f} → current={current_price:.5f} "
+            f"(Δ={price_delta:+.5f})"
+        )
+
+        # 4. Проверка
+        if signal == "CALL":
+            if candle_delta <= 0:
+                logger.info(f"   ⏸ 5с свеча против CALL (Δ {candle_delta:+.5f})")
+                return False
+            if price_delta <= 0:
+                logger.info(f"   ⏸ Цена против CALL (Δ {price_delta:+.5f})")
+                return False
+        elif signal == "PUT":
+            if candle_delta >= 0:
+                logger.info(f"   ⏸ 5с свеча против PUT (Δ {candle_delta:+.5f})")
+                return False
+            if price_delta >= 0:
+                logger.info(f"   ⏸ Цена против PUT (Δ {price_delta:+.5f})")
+                return False
+
+        logger.info(f"   ✅ Momentum OK — можно открывать")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка momentum check: {e}")
+        return True   # при ошибке — не блокируем
+
+async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper) -> Optional[dict]:
+    """
+    Открывает сделку СРАЗУ (без запроса цены перед открытием).
+    Возвращает deal dict или None.
+    """
+    try:
+        bet = steps[step_idx]
+        t0 = time.time()
+        if sig == "CALL":
+            trade_id, _ = await client.buy(p, bet, CFG["expiration"])
+        else:
+            trade_id, _ = await client.sell(p, bet, CFG["expiration"])
+        dt = time.time() - t0
+
+        deal = {
+            "id": trade_id,
+            "pair": p,
+            "entry": 0,
+            "amount": bet,
+            "signal": sig,
+            "open_time": time.time(),
+            "step": step_idx + 1,
+        }
+        dir_str = "ВВЕРХ ⬆️ (CALL)" if sig == "CALL" else "ВНИЗ ⬇️ (PUT)"
+        logger.info(f"📈 [{step_idx+1}/3] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек)")
+        return deal
+    except Exception as e:
+        logger.error(f"❌ Ошибка открытия ${steps[step_idx]:.2f}: {e}")
+        return None
+
+async def _wait_close(deal: dict, stopper):
+    """
+    Ждёт закрытия сделки (expiration + 5 сек запас).
+    """
+    last_open_time = deal["open_time"]
+    remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
+    logger.info(f"⏳ Ждём закрытия сделки #{deal['step']} (~{remaining:.0f} сек)...")
+    await stopper.sleep(remaining)
+
+async def _check_first_30s(client, pair: str, signal: str, entry_price: float):
+    """
+    Проверка через 30 сек после открытия 1-й ступени.
+    Возвращает:
+      "STEP2_NOW" — момент минус → открываем 2-ю сразу
+      "WAIT_CLOSE" — момент плюс → ждём закрытия 1-й
+    """
+    try:
+        current_price = await get_current_price(client, pair)
+        if current_price is None:
+            logger.warning(f"   ⚠️ Цена не получена при T+30 — STEP2_NOW (безопасно)")
+            return "STEP2_NOW"
+
+        if signal == "CALL":
+            in_profit = current_price > entry_price
+        else:
+            in_profit = current_price < entry_price
+
+        status = "+" if in_profit else "-"
+        logger.info(f"   Проверка T+30 | Цена {current_price:.5f} | 1-я: {status}")
+
+        if in_profit:
+            return "WAIT_CLOSE"
+        else:
+            return "STEP2_NOW"
+    except Exception as e:
+        logger.error(f"❌ Ошибка T+30 проверки: {e}")
+        return "STEP2_NOW"   # при ошибке — открываем 2-ю (безопаснее)
+
+async def _open_step_1(client, pair: str, signal: str, entry_price: float,
+                        steps: list, stopper):
+    """
+    Полный вход 1-й ступени.
+    Возвращает (deal, entry_price) или (None, None) при пропуске.
+    """
+    # 1. Ждать начало 1м свечи
+    if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+        return None, None
+
+    # 2. Задержка 3 сек (человеческая реакция)
+    human_delay = CFG.get("human_delay_sec", 3)
+    if human_delay > 0:
+        logger.info(f"   ⏱ Задержка {human_delay} сек (человеческая реакция)...")
+        await stopper.sleep(human_delay)
+
+    # 3. Momentum check
+    ok = await _check_momentum_5s(client, pair, signal, entry_price)
+    if not ok:
+        logger.info(f"   ⏸ Пропуск: momentum против")
+        return None, None
+
+    # 4. Открыть
+    deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper)
+    if deal is None:
+        return None, None
+
+    deal["entry"] = entry_price
+    return deal, entry_price
+
+async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
+                        with_analysis: bool = False, state=None):
+    """
+    2-я ступень.
+    with_analysis=False → открыть сразу (вариант A).
+    with_analysis=True  → полный анализ (вариант B: как 1-я).
+    Возвращает deal или None.
+    """
+    if not with_analysis:
+        # === Вариант A: СРАЗУ ===
+        logger.info(f"   📈 2-я ступень СРАЗУ (момент минус, без анализа)")
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper)
+        return deal
+    else:
+        # === Вариант B: С ПОЛНЫМ АНАЛИЗОМ ===
+        logger.info(f"   📈 2-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+
+        # Ищем сигнал (новый анализ)
+        new_signal, new_entry = await full_analysis(client, pair)
+        if new_signal is None:
+            logger.info(f"   ⏸ 2-я (анализ): нет сигнала на {pair} — смена пары")
+            if state is not None:
+                state.change_pair("2-я нет сигнала")
+            return None
+
+        logger.info(f"   ✅ 2-я (анализ): сигнал {new_signal} @ {new_entry}")
+
+        # Ждать начало 1м свечи
+        if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+            return None
+
+        # Задержка 3 сек
+        human_delay = CFG.get("human_delay_sec", 3)
+        if human_delay > 0:
+            logger.info(f"   ⏱ Задержка {human_delay} сек...")
+            await stopper.sleep(human_delay)
+
+        # Momentum check
+        ok = await _check_momentum_5s(client, pair, new_signal, new_entry)
+        if not ok:
+            logger.info(f"   ⏸ 2-я (анализ): momentum против — пропуск")
+            return None
+
+        # Открыть
+        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper)
+        if deal is None:
+            return None
+        deal["entry"] = new_entry
+        return deal
+
+async def _find_signal_for_step_3(client, stopper, state):
+    """
+    Ищет сигнал для 3-й ступени (независимо, как 1-я).
+    Возвращает (pair, signal, entry) или (None, None, None).
+    """
+    pairs_tried = 0
+    max_pairs = len(state.pairs)
+    pass_num = 0
+    error_streak = 0
+    max_errors = CFG.get("max_error_streak", 5)
+    pause_sec = CFG.get("step3_pause_between_circles_sec", 30)
+
+    while True:
+        if stopper.requested():
+            return None, None, None
+
+        p = state.current_pair()
+        logger.info(f"   🔍 [{pass_num+1}-й круг] Ищу сигнал на {p}...")
+
+        try:
+            # Payout
+            live_payout = await check_payout(client, p)
+            pmin, pmax = get_payout_range(p)
+            if live_payout is None or live_payout < pmin or live_payout > pmax:
+                logger.info(f"   ⏸ {p}: payout {live_payout} — смена пары")
+                state.change_pair("payout вне диапазона")
+                pairs_tried += 1
+                await stopper.sleep(2)
+                error_streak = 0   # успешная итерация
+            else:
+                # Анализ
+                sig, entry = await full_analysis(client, p)
+                if sig is not None:
+                    logger.info(f"   ✅ Найден сигнал на {p}: {sig} @ {entry}")
+                    return p, sig, entry
+
+                logger.info(f"   ⏸ {p}: нет сигнала — смена пары")
+                state.change_pair("нет сигнала")
+                pairs_tried += 1
+                await stopper.sleep(2)
+                error_streak = 0
+        except Exception as e:
+            error_streak += 1
+            logger.error(f"❌ Ошибка поиска #{error_streak}: {e}")
+            if error_streak >= max_errors:
+                logger.error(f"🛑 {max_errors} ошибок подряд — СТОП поиска")
+                return None, None, None
+            await stopper.sleep(5)
+            continue
+
+        # Круг завершён
+        if pairs_tried >= max_pairs:
+            pass_num += 1
+            logger.info(f"   😴 Круг {pass_num} завершён — пауза {pause_sec} сек")
+            await stopper.sleep(pause_sec)
+            pairs_tried = 0
+
+async def _open_step_3(client, pair: str, signal: str, entry_price: float,
+                        steps: list, stopper):
+    """
+    3-я ступень (полный вход как 1-я).
+    Возвращает deal или None.
+    """
+    # 1. Ждать начало 1м свечи
+    if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+        return None
+
+    # 2. Задержка 3 сек
+    human_delay = CFG.get("human_delay_sec", 3)
+    if human_delay > 0:
+        logger.info(f"   ⏱ Задержка {human_delay} сек...")
+        await stopper.sleep(human_delay)
+
+    # 3. Momentum check
+    ok = await _check_momentum_5s(client, pair, signal, entry_price)
+    if not ok:
+        logger.info(f"   ⏸ 3-я: momentum против — пропуск")
+        return None
+
+    # 4. Открыть $4 (step_idx=2)
+    deal = await _open_deal_raw(client, pair, 2, signal, steps, stopper)
+    if deal is None:
+        return None
+    deal["entry"] = entry_price
+    return deal
+
+
 async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
-    Серия с удвоением (новая логика):
-    - 1-я сделка $1 → проверка через 30 сек
-    - 2-я сделка $2 → если 1-я в минусе → ждём закрытия
-    - Проверка итога (1+2) через балансы
-    - Если минус → поиск сигнала (как в основном цикле) → 3-я $4
-    - Проверка итога (1+2+3) → результат
+    Серия мартингейла (новая логика).
 
-    Возвращает True (плюс) / False (минус).
+    Ступени:
+    - 1-я: full_analysis + начало 1м + 3 сек + momentum
+    - 2-я: A) СРАЗУ (момент минус T+30) / B) С АНАЛИЗОМ (реально минус T+60)
+    - 3-я: независимая, как 1-я
+
+    Возвращает True (серия плюс) / False (серия минус).
     """
+    # ===== Инициализация =====
     try:
         B_start = float(await client.balance())
     except Exception as e:
@@ -612,218 +935,107 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
     logger.info(f"   Ступени: {steps}")
 
-    open_deals = []
-
-    # ==================== СТУПЕНЬ 1 ====================
-    bet = steps[0]
-    t0 = time.time()
-    try:
-        if signal == "CALL":
-            trade_id, _ = await client.buy(pair, bet, CFG["expiration"])
-        else:
-            trade_id, _ = await client.sell(pair, bet, CFG["expiration"])
-        dt = time.time() - t0
-    except Exception as e:
-        logger.error(f"❌ Ошибка открытия ${bet}: {e}")
+    # ===== ШАГ 1: 1-я ступень (полный вход) =====
+    deal_1, entry_1 = await _open_step_1(client, pair, signal, entry_price, steps, stopper)
+    if deal_1 is None:
+        logger.info(f"⏸ СЕРИЯ прервана: не удалось открыть 1-ю")
         return False
 
-    open_deals.append({
-        "id": trade_id,
-        "pair": pair,
-        "entry": entry_price,
-        "amount": bet,
-        "signal": signal,
-        "open_time": time.time(),
-    })
-    logger.info(f"📈 [1/3] Открыл ${bet:.2f} {direction_str} (за {dt:.2f} сек)")
-
-    # ==================== ПРОВЕРКА 1 (через 30 сек) ====================
-    await asyncio.sleep(CFG["check_interval_sec"])
-
+    # ===== ШАГ 2: T+30 проверка =====
+    await stopper.sleep(CFG["check_interval_sec"])
     if stopper.requested():
         logger.warning("⏹ Остановка во время серии")
         return False
 
-    current_price = await get_current_price(client, pair)
-    if current_price is None:
-        logger.warning("⚠️ Цена не получена — пропускаю проверку")
-        first_in_profit = False
-    else:
-        first_entry = open_deals[0]["entry"]
-        if signal == "CALL":
-            first_in_profit = current_price > first_entry
-        else:
-            first_in_profit = current_price < first_entry
-        status = "+" if first_in_profit else "-"
-        logger.info(f"   Проверка 1 | Цена {current_price} | $1: {status}")
+    action = await _check_first_30s(client, pair, signal, entry_1)
 
-    # ==================== СТУПЕНЬ 2 (если 1-я в минусе) ====================
-    if not first_in_profit:
-        # 2-я сделка
-        bet = steps[1]
-        t0 = time.time()
+    deal_2 = None
+
+    if action == "STEP2_NOW":
+        # Момент минус → 2-я СРАЗУ (без анализа)
+        logger.info(f"   → 2-я СРАЗУ (момент минус в T+30)")
+        deal_2 = await _open_step_2(
+            client, pair, signal, steps, stopper,
+            with_analysis=False, state=state
+        )
+    else:  # WAIT_CLOSE
+        # Момент плюс → ждём закрытия 1-й
+        logger.info(f"   → 1-я в плюсе в моменте, ждём закрытия")
+        await _wait_close(deal_1, stopper)
+
         try:
-            if signal == "CALL":
-                trade_id, _ = await client.buy(pair, bet, CFG["expiration"])
-            else:
-                trade_id, _ = await client.sell(pair, bet, CFG["expiration"])
-            dt = time.time() - t0
-        except Exception as e:
-            logger.error(f"❌ Ошибка открытия ${bet}: {e}")
-            return False
-
-        open_deals.append({
-            "id": trade_id,
-            "pair": pair,
-            "entry": 0,
-            "amount": bet,
-            "signal": signal,
-            "open_time": time.time(),
-        })
-        logger.info(f"📈 [2/3] Открыл ${bet:.2f} {direction_str} (за {dt:.2f} сек)")
-
-        # ==================== ЖДЁМ ЗАКРЫТИЯ 2-х СДЕЛОК ====================
-        # Ждём закрытия последней (2-й) + запас
-        last_open_time = open_deals[-1]["open_time"]
-        remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
-        logger.info(f"⏳ Ждём закрытия 2 сделок (~{remaining:.0f} сек)...")
-        await stopper.sleep(remaining)
-
-        # Проверка итога (1+2) через балансы
-        try:
-            B_after_2 = float(await client.balance())
+            B_after_1 = float(await client.balance())
         except Exception as e:
             logger.error(f"Не удалось получить баланс: {e}")
             return False
 
-        delta_2 = B_after_2 - B_start
-        logger.info(f"🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})")
+        delta_1 = B_after_1 - B_start
+        logger.info(f"🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})")
 
-        if delta_2 > 0:
-            logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})")
+        if delta_1 > 0:
+            logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})")
             return True
-        else:
-            logger.info(f"❌ Итог 1+2 минус (Δ {delta_2:+.2f}) — ищу сигнал для 3-й")
 
-            # ==================== ПОИСК СИГНАЛА ДЛЯ 3-й СДЕЛКИ ====================
-            # Меняем пары как в основном алгоритме, пока не найдём сигнал
-            # После круга (все пары) → пауза 30 минут
+        # Реально минус → 2-я С АНАЛИЗОМ (ФИКС #11)
+        logger.info(f"   → 1-я закрылась в минус → 2-я С АНАЛИЗОМ")
+        deal_2 = await _open_step_2(
+            client, pair, signal, steps, stopper,
+            with_analysis=True, state=state
+        )
 
-            start_pair = state.current_pair()
-            pairs_tried = 0
-            max_pairs = len(state.pairs)
-            signal_3 = None
-            pair_3 = None
+    if deal_2 is None:
+        logger.info(f"❌ 2-я не открыта — серия закрыта")
+        return False
 
-            while True:
-                if stopper.requested():
-                    logger.warning("⏹ Остановка во время поиска")
-                    return False
+    # ===== ШАГ 3: Ждём закрытия 2-й =====
+    await _wait_close(deal_2, stopper)
 
-                # Проверка сигнала на текущей паре
-                pair_3 = state.current_pair()
-                logger.info(f"   🔍 Ищу сигнал на {pair_3}...")
+    try:
+        B_after_2 = float(await client.balance())
+    except Exception as e:
+        logger.error(f"Не удалось получить баланс: {e}")
+        return False
 
-                # Проверка payout
-                live_payout = await check_payout(client, pair_3)
-                pmin, pmax = get_payout_range(pair_3)
-                if live_payout is None or live_payout < pmin or live_payout > pmax:
-                    logger.info(f"   ⏸ {pair_3}: payout {live_payout} — смена пары")
-                    state.change_pair("payout вне диапазона")
-                    pairs_tried += 1
-                    await stopper.sleep(2)
-                    if pairs_tried >= max_pairs:
-                        logger.warning(f"   😴 Обошли все пары — пауза 30 мин")
-                        await stopper.sleep(1800)
-                        pairs_tried = 0
-                    continue
+    delta_2 = B_after_2 - B_start
+    logger.info(f"🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})")
 
-                # Проверка сигнала
-                signal_3, entry_price_3 = await full_analysis(client, pair_3)
-                if signal_3 is not None:
-                    logger.info(f"   ✅ Найден сигнал на {pair_3}: {signal_3}")
-                    break
+    if delta_2 > 0:
+        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})")
+        return True
 
-                # Нет сигнала → смена пары
-                logger.info(f"   ⏸ {pair_3}: нет сигнала — смена пары")
-                state.change_pair("нет сигнала")
-                pairs_tried += 1
-                await stopper.sleep(2)
+    # ===== ШАГ 4: 3-я ступень =====
+    logger.info(f"❌ Итог 1+2 минус (Δ {delta_2:+.2f}) — ищу сигнал для 3-й")
 
-                if pairs_tried >= max_pairs:
-                    logger.warning(f"   😴 Обошли все пары — пауза 30 мин")
-                    await stopper.sleep(1800)
-                    pairs_tried = 0
+    pair_3, signal_3, entry_3 = await _find_signal_for_step_3(client, stopper, state)
+    if pair_3 is None:
+        logger.warning("⏹ Не нашли сигнал для 3-й — серия закрыта")
+        return False
 
-            # ==================== СТУПЕНЬ 3 ====================
-            direction_3 = "ВВЕРХ ⬆️ (CALL)" if signal_3 == "CALL" else "ВНИЗ ⬇️ (PUT)"
-            bet = steps[2]  # $4
-            t0 = time.time()
-            try:
-                if signal_3 == "CALL":
-                    trade_id, _ = await client.buy(pair_3, bet, CFG["expiration"])
-                else:
-                    trade_id, _ = await client.sell(pair_3, bet, CFG["expiration"])
-                dt = time.time() - t0
-            except Exception as e:
-                logger.error(f"❌ Ошибка открытия ${bet}: {e}")
-                return False
+    deal_3 = await _open_step_3(
+        client, pair_3, signal_3, entry_3, steps, stopper
+    )
+    if deal_3 is None:
+        logger.info(f"❌ 3-я не открыта — серия закрыта")
+        return False
 
-            open_deals.append({
-                "id": trade_id,
-                "pair": pair_3,
-                "entry": 0,
-                "amount": bet,
-                "signal": signal_3,
-                "open_time": time.time(),
-            })
-            logger.info(f"📈 [3/3] Открыл ${bet:.2f} {direction_3} на {pair_3} (за {dt:.2f} сек)")
+    # ===== ШАГ 5: Ждём закрытия 3-й =====
+    await _wait_close(deal_3, stopper)
 
-            # ==================== ЖДЁМ ЗАКРЫТИЯ 3-й ====================
-            last_open_time = open_deals[-1]["open_time"]
-            remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
-            logger.info(f"⏳ Ждём закрытия 3-й сделки (~{remaining:.0f} сек)...")
-            await stopper.sleep(remaining)
+    try:
+        B_final = float(await client.balance())
+    except Exception as e:
+        logger.error(f"Не удалось получить баланс: {e}")
+        return False
 
-            # ==================== ИТОГ ====================
-            try:
-                B_final = float(await client.balance())
-            except Exception as e:
-                logger.error(f"Не удалось получить баланс: {e}")
-                return False
+    delta_final = B_final - B_start
+    logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
 
-            delta_final = B_final - B_start
-            logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
-
-            if delta_final > 0:
-                logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})")
-                return True
-            else:
-                logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_final:+.2f})")
-                return False
-
-    # ==================== 1-я В ПЛЮСЕ — ЖДЁМ ЗАКРЫТИЯ ====================
+    if delta_final > 0:
+        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})")
+        return True
     else:
-        last_open_time = open_deals[-1]["open_time"]
-        remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
-        logger.info(f"⏳ 1-я в плюсе — ждём закрытия (~{remaining:.0f} сек)...")
-        await stopper.sleep(remaining)
-
-        try:
-            B1 = float(await client.balance())
-        except Exception as e:
-            logger.error(f"Не удалось получить баланс: {e}")
-            return False
-
-        delta = B1 - B_start
-        logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B1:.2f} (Δ {delta:+.2f})")
-
-        if delta > 0:
-            logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta:+.2f})")
-            return True
-        else:
-            logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta:+.2f})")
-            return False
+        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_final:+.2f})")
+        return False
 
 
 
@@ -1149,11 +1361,16 @@ class Trader:
         self.ssid = ssid
         self.stopper = StopChecker()
         self.state: Optional[TraderState] = None
-        self.empty_candles_count = 0   # ← ДОБАВИТЬ
+        self.empty_candles_count = 0
         self.initial_balance = 0.0
         self.reference_balance = 0.0
         self.drawdown_count = 0
-        self.last_status_show = 0.0   # показ REF/BAL раз в 5 мин
+        self.last_status_show = 0.0
+        # === Автостоп + защита от ошибок ===
+        self.start_time = time.time()
+        self.max_runtime_sec = CFG.get("max_runtime_hours", 24) * 3600
+        self.error_streak = 0
+        self.max_error_streak = CFG.get("max_error_streak", 5)
 
     async def run(self):
         async with PocketOptionAsync(ssid=self.ssid) as client:
@@ -1198,6 +1415,14 @@ class Trader:
             last_payout_check = time.time()
 
             while True:
+                # === АВТОСТОП 24 ЧАСА ===
+                if time.time() - self.start_time >= self.max_runtime_sec:
+                    hours = self.max_runtime_sec / 3600
+                    logger.warning(f"⏹ Автостоп: {hours:.0f} часов работы завершены")
+                    if self.state:
+                        logger.info(self.state.summary())
+                    return
+
                 try:
                     if self.stopper.requested():
                         break
@@ -1352,17 +1577,25 @@ class Trader:
                     except Exception:
                         pass
 
+                    self.error_streak = 0   # ← СБРОС при успешной итерации
                     await self.stopper.sleep(5)
 
                 except KeyboardInterrupt:
                     break
                 except Exception as e:
-                    logger.error(f"❌ Ошибка в цикле: {e}")
+                    self.error_streak += 1
+                    logger.error(f"⚠️ Ошибка #{self.error_streak}/{self.max_error_streak}: {e}")
+
+                    if self.error_streak >= self.max_error_streak:
+                        logger.error(f"🛑 {self.max_error_streak} ошибок подряд — ПОЛНЫЙ СТОП")
+                        return
+
                     logger.info("🔄 Переподключение через 30 сек...")
                     await self.stopper.sleep(30)
                     try:
                         _ = await client.balance()
                         logger.info("✅ Соединение живо")
+                        self.error_streak = 0   # соединение восстановлено
                     except Exception as e2:
                         logger.error(f"❌ Соединение потеряно: {e2}")
                         logger.error("⏹ Требуется перезапуск")
