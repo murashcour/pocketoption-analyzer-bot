@@ -14,7 +14,7 @@ Created with DeepSeek AI assistance (deepseek.com).
 - Уровни S/R: блок близко к поддержке/сопротивлению
 - Волатильность: ATR14 >= 0.1%
 - Payout [85, 92]% с перепроверкой каждые 30 мин
-- Серия: 4 ступени с удвоением (1%, 2%, 4%, 8%)
+- Серия: 3 ступени с удвоением (1%, 2%, 4%)
 - Вход по цене закрытия текущей свечи
 - Счётчик пропусков: +серия = 5, -серия = 1
 """
@@ -53,7 +53,7 @@ DEFAULT_CONFIG = {
     "max_checks": 3,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
-    "fixed_steps": [1.0, 2.0, 4.0, 8.0],
+    "fixed_steps": [1.0, 2.0, 4.0],
       # Payout (общие)
     "payout_min": 85,
     "payout_max": 92,
@@ -550,13 +550,12 @@ async def check_payout(client, asset: str) -> Optional[float]:
 def get_martingale_steps(balance: float) -> List[float]:
     """Ступени мартингейла: при >= 100 → 1% и ×2, при < 100 → фикс."""
     if balance < CFG["min_balance_for_percent"]:
-        return list(CFG["fixed_steps"])
+        return list(CFG["fixed_steps"])[:3]
     base = round(balance * CFG["base_percent"] / 100, 2)
     return [
         base,
         round(base * 2, 2),
         round(base * 4, 2),
-        round(base * 8, 2),
     ]
 
 
