@@ -98,6 +98,7 @@ DEFAULT_CONFIG = {
     "news_currencies": ["USD", "EUR", "GBP", "JPY"],
     "news_refresh_hours": 4,
     "news_fallback_stop": True,
+    "momentum_timeout_sec": 4,
 }
 
 # ==================== ГЛОБАЛЬНЫЕ НАСТРОЙКИ ====================
@@ -614,48 +615,69 @@ async def _wait_candle_start(stopper, max_sec: int = 8) -> bool:
 
 async def _check_momentum(client, pair: str, signal: str, entry_price: float) -> bool:
     """
-    Проверка momentum через текущую цену vs entry_price (быстро).
-    Использует get_current_price (get_candles_live).
+    Проверка momentum на ЗАКРЫТОЙ 5s свече + сравнение с entry_price.
 
     Логика:
-    - CALL: current_price > entry_price → OK
-    - PUT:  current_price < entry_price → OK
-    - Иначе — пропуск
+    - CALL: 5s свеча растёт (close > open) И её close > entry_price
+    - PUT:  5s свеча падает (close < open) И её close < entry_price
+    - Иначе — против, пропуск
+
+    Возвращает True (можно открывать) / False (против).
     """
     if not CFG.get("momentum_enabled", True):
         logger.info(f"   ⏸ Momentum отключён в config")
         return True
 
+    if not entry_price or entry_price <= 0:
+        logger.warning(f"   ⚠ entry_price не задан ({entry_price}) — momentum fail")
+        return False
+
+    candle_sec = CFG.get("momentum_candle_seconds", 5)
+    timeout = CFG.get("momentum_timeout_sec", 4)
+
     try:
         t0 = time.time()
-        current_price = await get_current_price(client, pair)
+        candles = await asyncio.wait_for(
+            client.get_candles(pair, candle_sec, 3),
+            timeout=timeout
+        )
         dt = time.time() - t0
 
-        if current_price is None:
-            logger.warning(f"   ⚠ Цена не получена за {dt:.2f} сек — пропуск momentum")
-            return True   # не блокируем
+        if not candles or len(candles) < 2:
+            cnt = len(candles) if candles else 0
+            logger.warning(f"   ⚠ Нет 5s свечей ({cnt}) за {dt:.2f} сек — momentum fail")
+            return False
 
-        delta = current_price - entry_price
+        last_closed = candles[-2]
+        o = get_open(last_closed)
+        c = get_close(last_closed)
+        candle_delta = c - o
+        price_delta = c - entry_price
 
         logger.info(
-            f"   [Momentum] entry={entry_price:.5f} → current={current_price:.5f} "
-            f"(Δ={delta:+.5f}, за {dt:.2f} сек)"
+            f"   [Momentum] {signal} entry={entry_price:.5f} "
+            f"5s_closed={c:.5f} (Δc={candle_delta:+.5f}, Δp={price_delta:+.5f}, "
+            f"за {dt:.2f}с)"
         )
 
         if signal == "CALL":
-            if delta <= 0:
-                logger.info(f"   ⏸ Цена против CALL (Δ {delta:+.5f})")
-                return False
-        elif signal == "PUT":
-            if delta >= 0:
-                logger.info(f"   ⏸ Цена против PUT (Δ {delta:+.5f})")
-                return False
+            ok = candle_delta > 0 and price_delta > 0
+        else:  # PUT
+            ok = candle_delta < 0 and price_delta < 0
 
-        logger.info(f"   ✅ Momentum OK — можно открывать")
-        return True
+        if ok:
+            logger.info(f"   ✅ Momentum OK — можно открывать")
+        else:
+            logger.info(f"   ⏸ Momentum против {signal}")
+        return ok
+
+    except asyncio.TimeoutError:
+        logger.warning(f"   ⚠ Momentum timeout ({timeout}s)")
+        return False
     except Exception as e:
-        logger.error(f"❌ Ошибка momentum check: {e}")
-        return True   # не блокируем при ошибке
+        logger.warning(f"   ⚠ Momentum error: {e}")
+        return False
+
 
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper) -> Optional[dict]:
