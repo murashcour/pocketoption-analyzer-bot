@@ -805,6 +805,9 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                 if new_sig is not None:
                     signal, entry_price = new_sig, new_entry
                     continue
+                else:
+                    signal = None
+                    entry_price = 0.0
             await stopper.sleep(2)
 
             if pairs_tried >= max_pairs:
@@ -1051,6 +1054,9 @@ async def _open_step_3(client, pair: str, signal: str, entry_price: float,
                 if new_sig is not None:
                     signal, entry_price = new_sig, new_entry
                     continue
+                else:
+                    signal = None
+                    entry_price = 0.0
             await stopper.sleep(2)
 
             if pairs_tried >= max_pairs:
