@@ -679,7 +679,7 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 
 
-async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper) -> Optional[dict]:
+async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
     """
     Открывает сделку СРАЗУ (без запроса цены перед открытием).
     Возвращает deal dict или None.
@@ -696,7 +696,7 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
         deal = {
             "id": trade_id,
             "pair": p,
-            "entry": 0,
+            "entry": entry_price,
             "amount": bet,
             "signal": sig,
             "open_time": time.time(),
@@ -816,18 +816,17 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
             continue
 
         # 3. Открыть
-        deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper)
+        deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper, entry_price)
         if deal is None:
             logger.warning(f"   ⚠️ Ошибка открытия — повтор через 5 сек")
             await stopper.sleep(5)
             continue
 
-        deal["entry"] = entry_price
         return deal, entry_price
 
 
 async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
-                        with_analysis: bool = False, state=None):
+                        with_analysis: bool = False, state=None, entry_price: float = 0):
     """
     2-я ступень.
     with_analysis=False → СРАЗУ (без анализа).
@@ -837,7 +836,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
     if not with_analysis:
         # === Вариант A: СРАЗУ (без анализа, без цикла) ===
         logger.info(f"   📈 2-я ступень СРАЗУ (момент минус)")
-        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper)
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price)
         return deal
 
     # === Вариант B: С АНАЛИЗОМ + цикл ===
@@ -899,12 +898,11 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
             continue
 
         # Открыть
-        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper)
+        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry)
         if deal is None:
             logger.warning(f"   ⚠️ Ошибка открытия 2-й — повтор через 5 сек")
             await stopper.sleep(5)
             continue
-        deal["entry"] = new_entry
         return deal
 
 
@@ -1065,12 +1063,11 @@ async def _open_step_3(client, pair: str, signal: str, entry_price: float,
             continue
 
         # Открыть $4
-        deal = await _open_deal_raw(client, pair, 2, signal, steps, stopper)
+        deal = await _open_deal_raw(client, pair, 2, signal, steps, stopper, entry_price)
         if deal is None:
             logger.warning(f"   ⚠️ Ошибка открытия 3-й — повтор через 5 сек")
             await stopper.sleep(5)
             continue
-        deal["entry"] = entry_price
         return deal
 
 
@@ -1119,7 +1116,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.info(f"   → 2-я СРАЗУ (момент минус в T+30)")
         deal_2 = await _open_step_2(
             client, pair, signal, steps, stopper,
-            with_analysis=False, state=state
+            with_analysis=False, state=state, entry_price=entry_1
         )
     else:  # WAIT_CLOSE
         # Момент плюс → ждём закрытия 1-й
@@ -1143,7 +1140,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.info(f"   → 1-я закрылась в минус → 2-я С АНАЛИЗОМ")
         deal_2 = await _open_step_2(
             client, pair, signal, steps, stopper,
-            with_analysis=True, state=state
+            with_analysis=True, state=state, entry_price=entry_1
         )
 
     if deal_2 is None:
