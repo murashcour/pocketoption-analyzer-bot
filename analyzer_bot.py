@@ -34,7 +34,7 @@ except ImportError:
     REQUESTS_AVAILABLE = False
 from typing import Optional, List, Tuple
 
-from BinaryOptionsToolsV2 import PocketOptionAsync
+from BinaryOptionsToolsV2 import PocketOptionAsync, PocketOptionError
 
 # ==================== ПУТИ ====================
 # ==================== PATHS ====================
@@ -706,6 +706,9 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
         dir_str = "ВВЕРХ ⬆️ (CALL)" if sig == "CALL" else "ВНИЗ ⬇️ (PUT)"
         logger.info(f"📈 [{step_idx+1}/3] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек)")
         return deal
+    except (PocketOptionError, ConnectionError, OSError) as e:
+        logger.error(f"❌ СЕТЕВАЯ ошибка открытия ${steps[step_idx]:.2f}: {e}")
+        raise
     except Exception as e:
         logger.error(f"❌ Ошибка открытия ${steps[step_idx]:.2f}: {e}")
         return None
