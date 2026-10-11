@@ -614,70 +614,11 @@ async def _wait_candle_start(stopper, max_sec: int = 8) -> bool:
 
 async def _check_momentum(client, pair: str, signal: str, entry_price: float) -> bool:
     """
-    Проверка momentum на ЗАКРЫТОЙ 5s свече + сравнение с entry_price.
-
-    Логика:
-    - CALL: 5s свеча растёт (close > open) И её close > entry_price
-    - PUT:  5s свеча падает (close < open) И её close < entry_price
-    - Иначе — против, пропуск
-
-    Возвращает True (можно открывать) / False (против).
+    Momentum временно отключён (T3).
+    Всегда возвращает True — блок `if not ok:` не срабатывает.
+    Для возврата — восстановить тело из analyzer_bot.py.bak_remove_momentum.
     """
-    if not CFG.get("momentum_enabled", True):
-        logger.info(f"   ⏸ Momentum отключён в config")
-        return True
-
-    if not entry_price or entry_price <= 0:
-        logger.warning(f"   ⚠ entry_price не задан ({entry_price}) — momentum fail")
-        return False
-
-    candle_sec = CFG.get("momentum_candle_seconds", 5)
-    timeout = CFG.get("momentum_timeout_sec", 4)
-
-    try:
-        t0 = time.time()
-        candles = await asyncio.wait_for(
-            client.get_candles(pair, candle_sec, 3),
-            timeout=timeout
-        )
-        dt = time.time() - t0
-
-        if not candles or len(candles) < 2:
-            cnt = len(candles) if candles else 0
-            logger.warning(f"   ⚠ Нет 5s свечей ({cnt}) за {dt:.2f} сек — momentum fail")
-            return False
-
-        last_closed = candles[-2]
-        o = get_open(last_closed)
-        c = get_close(last_closed)
-        candle_delta = c - o
-        price_delta = c - entry_price
-
-        logger.info(
-            f"   [Momentum] {signal} entry={entry_price:.5f} "
-            f"5s_closed={c:.5f} (Δc={candle_delta:+.5f}, Δp={price_delta:+.5f}, "
-            f"за {dt:.2f}с)"
-        )
-
-        if signal == "CALL":
-            ok = candle_delta > 0 and price_delta > 0
-        else:  # PUT
-            ok = candle_delta < 0 and price_delta < 0
-
-        if ok:
-            logger.info(f"   ✅ Momentum OK — можно открывать")
-        else:
-            logger.info(f"   ⏸ Momentum против {signal}")
-        return ok
-
-    except asyncio.TimeoutError:
-        logger.warning(f"   ⚠ Momentum timeout ({timeout}s)")
-        return False
-    except Exception as e:
-        logger.warning(f"   ⚠ Momentum error: {e}")
-        return False
-
-
+    return True
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
     """
