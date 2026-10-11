@@ -707,7 +707,7 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
 
     while True:
         if stopper.requested():
-            return None, None
+            return None, None, None
 
         # Progress каждые 5 минут
         if time.time() - last_log_time >= 300:
@@ -720,7 +720,7 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
 
         # 1. Ждать начало 1м свечи
         if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-            return None, None
+            return None, None, None
 
         # 2. Momentum check
         ok = await _check_momentum(client, pair, signal, entry_price)
@@ -763,7 +763,7 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
             await stopper.sleep(5)
             continue
 
-        return deal, entry_price
+        return pair, deal, entry_price
 
 
 async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
@@ -778,7 +778,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
         # === Вариант A: СРАЗУ (без анализа, без цикла) ===
         logger.info(f"   📈 2-я ступень СРАЗУ (момент минус)")
         deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price)
-        return deal
+        return pair, deal
 
     # === Вариант B: С АНАЛИЗОМ + цикл ===
     logger.info(f"   📈 2-я ступень с ПОЛНЫМ АНАЛИЗОМ")
@@ -791,7 +791,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
 
     while True:
         if stopper.requested():
-            return None
+            return None, None
 
         # Progress каждые 5 минут
         if time.time() - last_log_time >= 300:
@@ -821,7 +821,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
 
         # Ждать начало 1м свечи
         if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-            return None
+            return None, None
 
         # Momentum check
         ok = await _check_momentum(client, pair, new_signal, new_entry)
@@ -844,7 +844,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
             logger.warning(f"   ⚠️ Ошибка открытия 2-й — повтор через 5 сек")
             await stopper.sleep(5)
             continue
-        return deal
+        return pair, deal
 
 
 async def _find_signal_for_step_3(client, stopper, state):
@@ -952,7 +952,7 @@ async def _open_step_3(client, pair: str, signal: str, entry_price: float,
 
     while True:
         if stopper.requested():
-            return None
+            return None, None
 
         # Progress каждые 5 минут
         if time.time() - last_log_time >= 300:
@@ -965,7 +965,7 @@ async def _open_step_3(client, pair: str, signal: str, entry_price: float,
 
         # Ждать начало 1м свечи
         if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-            return None
+            return None, None
 
         # Momentum check
         ok = await _check_momentum(client, pair, signal, entry_price)
@@ -1009,7 +1009,7 @@ async def _open_step_3(client, pair: str, signal: str, entry_price: float,
             logger.warning(f"   ⚠️ Ошибка открытия 3-й — повтор через 5 сек")
             await stopper.sleep(5)
             continue
-        return deal
+        return pair, deal
 
 
 async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
@@ -1037,7 +1037,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     logger.info(f"   Ступени: {steps}")
 
     # ===== ШАГ 1: 1-я ступень (полный вход) =====
-    deal_1, entry_1 = await _open_step_1(client, pair, signal, entry_price, steps, stopper, state=state)
+    pair, deal_1, entry_1 = await _open_step_1(client, pair, signal, entry_price, steps, stopper, state=state)
     if deal_1 is None:
         logger.info(f"⏸ СЕРИЯ прервана: не удалось открыть 1-ю")
         return False
@@ -1055,7 +1055,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     if action == "STEP2_NOW":
         # Момент минус → 2-я СРАЗУ (без анализа)
         logger.info(f"   → 2-я СРАЗУ (момент минус в T+30)")
-        deal_2 = await _open_step_2(
+        pair, deal_2 = await _open_step_2(
             client, pair, signal, steps, stopper,
             with_analysis=False, state=state, entry_price=entry_1
         )
@@ -1079,7 +1079,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
 
         # Реально минус → 2-я С АНАЛИЗОМ (ФИКС #11)
         logger.info(f"   → 1-я закрылась в минус → 2-я С АНАЛИЗОМ")
-        deal_2 = await _open_step_2(
+        pair, deal_2 = await _open_step_2(
             client, pair, signal, steps, stopper,
             with_analysis=True, state=state, entry_price=entry_1
         )
@@ -1112,7 +1112,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.warning("⏹ Не нашли сигнал для 3-й — серия закрыта")
         return False
 
-    deal_3 = await _open_step_3(
+    pair_3, deal_3 = await _open_step_3(
         client, pair_3, signal_3, entry_3, steps, stopper, state=state
     )
     if deal_3 is None:
