@@ -1531,241 +1531,261 @@ class Trader:
         self.max_error_streak = CFG.get("max_error_streak", 5)
 
     async def run(self):
-        async with PocketOptionAsync(ssid=self.ssid) as client:
-            logger.info("✅ Подключение установлено")
+        """Внешний цикл реконнекта при потере соединения."""
+        max_reconnect = 10
+        attempts = 0
+        while True:
             try:
-                balance = float(await client.balance())
-                logger.info(f"💰 Баланс: ${balance:.2f}")
-            except Exception as e:
-                logger.error(f"Ошибка баланса: {e}")
-                return
-
-            # === ИНИЦИАЛИЗАЦИЯ ПРОСАДКИ ===
-            self.initial_balance = balance
-            self.reference_balance = balance
-            self.drawdown_count = 0
-            logger.info(
-                f"🛡 Защита от просадки: {CFG['max_drawdown_percent']}%, "
-                f"пауза {CFG['drawdown_pause_sec']//60} мин, "
-                f"макс {CFG['drawdown_max_count']} просадок"
-            )
-
-            pairs = await load_currency_pairs(client)
-            if not pairs:
-                logger.error(
-                    f"❌ Нет пар с payout: OTC [{CFG['payout_min_otc']}, {CFG['payout_max_otc']}]%, "
-                    f"REAL [{CFG['payout_min_real']}, {CFG['payout_max_real']}]%"
-                )
-                return
-
-            self.state = TraderState(pairs)
-            logger.info(f"💡 Остановка: Ctrl+C или создай файл stop.flag")
-            logger.info(
-                f"📊 Настройки: EXPIRATION={CFG['expiration']}s, "
-                f"MIN_CONF={CFG['min_confirmations']}, "
-                f"RSI {CFG['rsi_bear_max']}/{CFG['rsi_bull_min']}, "
-                f"S/R ±{CFG['sr_proximity_percent']}%, "
-                f"ATR≥{CFG['atr_min_percent']}%, "
-                f"пропусков: +серия→{CFG['skip_before_change_plus']}, "
-                f"-серия→{CFG['skip_before_change_minus']}"
-            )
-
-            last_payout_check = time.time()
-
-            while True:
-                # === АВТОСТОП 24 ЧАСА ===
-                if time.time() - self.start_time >= self.max_runtime_sec:
-                    hours = self.max_runtime_sec / 3600
-                    logger.warning(f"⏹ Автостоп: {hours:.0f} часов работы завершены")
-                    if self.state:
-                        logger.info(self.state.summary())
+                async with PocketOptionAsync(ssid=self.ssid) as client:
+                    logger.info("✅ Подключение установлено")
+                    await self._run_with_client(client)
+                    return   # нормальный выход
+            except (PocketOptionError, ConnectionError, OSError) as e:
+                attempts += 1
+                logger.warning(f"⚠ Соединение потеряно ({attempts}/{max_reconnect}): {e}")
+                if attempts >= max_reconnect:
+                    logger.error(f"🛑 {max_reconnect} неудачных реконнектов — СТОП")
                     return
+                await asyncio.sleep(10)
+                continue
+            except KeyboardInterrupt:
+                return
+
+    async def _run_with_client(self, client):
+        """Тело торгового цикла. client — уже подключённый."""
+        try:
+            balance = float(await client.balance())
+            logger.info(f"💰 Баланс: ${balance:.2f}")
+        except Exception as e:
+            logger.error(f"Ошибка баланса: {e}")
+            return
+
+        # === ИНИЦИАЛИЗАЦИЯ ПРОСАДКИ ===
+        self.initial_balance = balance
+        self.reference_balance = balance
+        self.drawdown_count = 0
+        logger.info(
+            f"🛡 Защита от просадки: {CFG['max_drawdown_percent']}%, "
+            f"пауза {CFG['drawdown_pause_sec']//60} мин, "
+            f"макс {CFG['drawdown_max_count']} просадок"
+        )
+
+        pairs = await load_currency_pairs(client)
+        if not pairs:
+            logger.error(
+                f"❌ Нет пар с payout: OTC [{CFG['payout_min_otc']}, {CFG['payout_max_otc']}]%, "
+                f"REAL [{CFG['payout_min_real']}, {CFG['payout_max_real']}]%"
+            )
+            return
+
+        self.state = TraderState(pairs)
+        logger.info(f"💡 Остановка: Ctrl+C или создай файл stop.flag")
+        logger.info(
+            f"📊 Настройки: EXPIRATION={CFG['expiration']}s, "
+            f"MIN_CONF={CFG['min_confirmations']}, "
+            f"RSI {CFG['rsi_bear_max']}/{CFG['rsi_bull_min']}, "
+            f"S/R ±{CFG['sr_proximity_percent']}%, "
+            f"ATR≥{CFG['atr_min_percent']}%, "
+            f"пропусков: +серия→{CFG['skip_before_change_plus']}, "
+            f"-серия→{CFG['skip_before_change_minus']}"
+        )
+
+        last_payout_check = time.time()
+
+        while True:
+            # === АВТОСТОП 24 ЧАСА ===
+            if time.time() - self.start_time >= self.max_runtime_sec:
+                hours = self.max_runtime_sec / 3600
+                logger.warning(f"⏹ Автостоп: {hours:.0f} часов работы завершены")
+                if self.state:
+                    logger.info(self.state.summary())
+                return
+
+            try:
+                if self.stopper.requested():
+                    break
+
+                 # === ПРОВЕРКА ПРОСАДКИ ===
+                try:
+                    current_balance = float(await client.balance())
+
+                    # Санитарная проверка — защита от бага API
+                    if current_balance < 0:
+                        logger.warning(
+                            f"⚠️ Баланс отрицательный (${current_balance:.2f}) — "
+                            f"вероятно, баг API. Пропускаю проверку просадки."
+                        )
+                    elif current_balance > self.reference_balance * 3:
+                        logger.warning(
+                            f"⚠️ Баланс подозрительно большой "
+                            f"(${current_balance:.2f} при reference "
+                            f"${self.reference_balance:.2f}) — пропускаю проверку."
+                        )
+                    else:
+                        # === REFERENCE UPDATE (+10%) ===
+                        if current_balance >= self.reference_balance * 1.10:
+                            old_ref = self.reference_balance
+                            self.reference_balance = current_balance
+                            logger.info(
+                                f"📈 Reference обновлён: "
+                                f"${old_ref:.2f} → ${current_balance:.2f} (+10%)"
+                            )
+
+                        # === ПРОВЕРКА ПРОСАДКИ ===
+                        threshold = self.reference_balance * (
+                            1 - CFG["max_drawdown_percent"] / 100
+                        )
+                        if current_balance < threshold:
+                            self.drawdown_count += 1
+                            logger.warning(
+                                f"🛑 ПРОСАДКА #{self.drawdown_count} "
+                                f"({CFG['max_drawdown_percent']}%): "
+                                f"${self.reference_balance:.2f} → ${current_balance:.2f}"
+                            )
+                            if self.drawdown_count >= CFG["drawdown_max_count"]:
+                                logger.error(
+                                    f"🛑 Достигнут лимит просадок "
+                                    f"({CFG['drawdown_max_count']}) — СТОП"
+                                )
+                                return
+                            pause_sec = CFG["drawdown_pause_sec"]
+                            logger.info(f"⏸ Пауза {pause_sec//60} мин...")
+                            await self.stopper.sleep(pause_sec)
+                            self.reference_balance = current_balance
+                            logger.info(
+                                f"✅ После паузы. Новый reference: "
+                                f"${self.reference_balance:.2f}"
+                            )
+                except Exception as e:
+                    logger.debug(f"Ошибка проверки просадки: {e}")
+
+                # === ПОКАЗ REF/BAL КАЖДЫЕ 5 МИН ===
+                if time.time() - self.last_status_show >= 300:
+                    try:
+                        _bal_now = float(await client.balance())
+                        _threshold = self.reference_balance * (
+                            1 - CFG["max_drawdown_percent"] / 100
+                        )
+                        _msg = (
+                            f"💰 Reference: ${self.reference_balance:.2f} | "
+                            f"Текущий: ${_bal_now:.2f} | "
+                            f"Порог просадки: ${_threshold:.2f}"
+                        )
+                        logger.info(_msg)
+                        # Синий цвет в консоль
+                        print(f"\033[94m{_msg}\033[0m")
+                    except Exception as e:
+                        logger.debug(f"Ошибка показа REF/BAL: {e}")
+                    self.last_status_show = time.time()
+
+                # === ПРОВЕРКА НОВОСТЕЙ ===
+                news_pause, news_wait, news_event = check_news_pause()
+                if news_pause == "STOP":
+                    logger.error("🛑 Новости недоступны — СТОП")
+                    return
+                if news_pause:
+                    logger.info(f"⏸ Пауза до конца новости ({news_wait} сек)...")
+                    await self.stopper.sleep(news_wait + 5)
+                    continue
+
+                # Перепроверка payout
+                if time.time() - last_payout_check >= CFG["payout_recheck_sec"]:
+                    logger.info(f"\n🔄 Перепроверка payout всех пар...")
+                    new_pairs = await load_currency_pairs(client)
+                    if new_pairs:
+                        self.state.update_pairs(new_pairs)
+                    last_payout_check = time.time()
+
+                pair = self.state.current_pair()
+                logger.info(f"\n🎯 Проверяю {pair}...")
+
+                # Payout кэш
+                if self.state.current_payout is None:
+                    live_payout = await check_payout(client, pair)
+                    if live_payout is None:
+                        logger.warning(f"⚠️ [{pair}] Payout не получен")
+                        self.state.change_pair("payout не получен")
+                        continue
+                    pmin, pmax = get_payout_range(pair)
+                    if live_payout < pmin or live_payout > pmax:
+                        logger.warning(
+                            f"⚠️ [{pair}] Payout {live_payout:.1f}% вне "
+                            f"[{pmin}, {pmax}]%"
+                        )
+                        self.state.change_pair("payout вне диапазона")
+                        continue
+                    self.state.current_payout = live_payout
+                    logger.info(f"💹 [{pair}] Payout {live_payout:.1f}% — OK")
+
+                                  # Анализ
+                signal, entry_price = await full_analysis(client, pair)
+                if signal is None:
+                    # Счётчик "Мало данных"
+                    self.empty_candles_count += 1
+                    if self.empty_candles_count >= 5:
+                        logger.warning("⚠️ 5 раз подряд 'Мало данных' — пауза 60 сек")
+                        await self.stopper.sleep(60)
+                        self.empty_candles_count = 0
+                        continue
+
+                    if self.state.on_skip() == "CHANGE_PAIR":
+                        await self.stopper.sleep(2)   # ← sleep при CHANGE_PAIR
+                        continue
+                    await self.stopper.sleep(5)
+                    continue
+                else:
+                    self.empty_candles_count = 0   # ← СБРОС при успехе
+
+                self.state.skip_streak = 0
+                is_win = await run_martingale_series(
+                    client, pair, signal, self.stopper, self.state, entry_price
+                )
+
+                if is_win:
+                    self.state.on_win()
+                    logger.info(f"✅ Серия плюс — остаёмся на {pair}")
+                else:
+                    self.state.on_loss()
+                    logger.info(f"❌ Серия минус — смена пары")
+                    self.state.change_pair("серия минус")
+
+                # сброс error_streak — серия реально отработала
+                self.error_streak = 0
 
                 try:
-                    if self.stopper.requested():
-                        break
+                    balance = float(await client.balance())
+                    logger.info(f"💰 Баланс: ${balance:.2f}")
+                except Exception:
+                    pass
 
-                     # === ПРОВЕРКА ПРОСАДКИ ===
-                    try:
-                        current_balance = float(await client.balance())
+                await self.stopper.sleep(5)
 
-                        # Санитарная проверка — защита от бага API
-                        if current_balance < 0:
-                            logger.warning(
-                                f"⚠️ Баланс отрицательный (${current_balance:.2f}) — "
-                                f"вероятно, баг API. Пропускаю проверку просадки."
-                            )
-                        elif current_balance > self.reference_balance * 3:
-                            logger.warning(
-                                f"⚠️ Баланс подозрительно большой "
-                                f"(${current_balance:.2f} при reference "
-                                f"${self.reference_balance:.2f}) — пропускаю проверку."
-                            )
-                        else:
-                            # === REFERENCE UPDATE (+10%) ===
-                            if current_balance >= self.reference_balance * 1.10:
-                                old_ref = self.reference_balance
-                                self.reference_balance = current_balance
-                                logger.info(
-                                    f"📈 Reference обновлён: "
-                                    f"${old_ref:.2f} → ${current_balance:.2f} (+10%)"
-                                )
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                self.error_streak += 1
+                logger.error(f"⚠️ Ошибка #{self.error_streak}/{self.max_error_streak}: {e}")
 
-                            # === ПРОВЕРКА ПРОСАДКИ ===
-                            threshold = self.reference_balance * (
-                                1 - CFG["max_drawdown_percent"] / 100
-                            )
-                            if current_balance < threshold:
-                                self.drawdown_count += 1
-                                logger.warning(
-                                    f"🛑 ПРОСАДКА #{self.drawdown_count} "
-                                    f"({CFG['max_drawdown_percent']}%): "
-                                    f"${self.reference_balance:.2f} → ${current_balance:.2f}"
-                                )
-                                if self.drawdown_count >= CFG["drawdown_max_count"]:
-                                    logger.error(
-                                        f"🛑 Достигнут лимит просадок "
-                                        f"({CFG['drawdown_max_count']}) — СТОП"
-                                    )
-                                    return
-                                pause_sec = CFG["drawdown_pause_sec"]
-                                logger.info(f"⏸ Пауза {pause_sec//60} мин...")
-                                await self.stopper.sleep(pause_sec)
-                                self.reference_balance = current_balance
-                                logger.info(
-                                    f"✅ После паузы. Новый reference: "
-                                    f"${self.reference_balance:.2f}"
-                                )
-                    except Exception as e:
-                        logger.debug(f"Ошибка проверки просадки: {e}")
+                if self.error_streak >= self.max_error_streak:
+                    logger.error(f"🛑 {self.max_error_streak} ошибок подряд — ПОЛНЫЙ СТОП")
+                    return
 
-                    # === ПОКАЗ REF/BAL КАЖДЫЕ 5 МИН ===
-                    if time.time() - self.last_status_show >= 300:
-                        try:
-                            _bal_now = float(await client.balance())
-                            _threshold = self.reference_balance * (
-                                1 - CFG["max_drawdown_percent"] / 100
-                            )
-                            _msg = (
-                                f"💰 Reference: ${self.reference_balance:.2f} | "
-                                f"Текущий: ${_bal_now:.2f} | "
-                                f"Порог просадки: ${_threshold:.2f}"
-                            )
-                            logger.info(_msg)
-                            # Синий цвет в консоль
-                            print(f"\033[94m{_msg}\033[0m")
-                        except Exception as e:
-                            logger.debug(f"Ошибка показа REF/BAL: {e}")
-                        self.last_status_show = time.time()
+                logger.info("🔄 Переподключение через 30 сек...")
+                await self.stopper.sleep(30)
+                try:
+                    _ = await client.balance()
+                    logger.info("✅ Соединение живо")
+                    self.error_streak = 0   # соединение восстановлено
+                except Exception as e2:
+                    logger.error(f"❌ Соединение потеряно: {e2}")
+                    logger.error("⏹ Требуется перезапуск")
+                    return
 
-                    # === ПРОВЕРКА НОВОСТЕЙ ===
-                    news_pause, news_wait, news_event = check_news_pause()
-                    if news_pause == "STOP":
-                        logger.error("🛑 Новости недоступны — СТОП")
-                        return
-                    if news_pause:
-                        logger.info(f"⏸ Пауза до конца новости ({news_wait} сек)...")
-                        await self.stopper.sleep(news_wait + 5)
-                        continue
-
-                    # Перепроверка payout
-                    if time.time() - last_payout_check >= CFG["payout_recheck_sec"]:
-                        logger.info(f"\n🔄 Перепроверка payout всех пар...")
-                        new_pairs = await load_currency_pairs(client)
-                        if new_pairs:
-                            self.state.update_pairs(new_pairs)
-                        last_payout_check = time.time()
-
-                    pair = self.state.current_pair()
-                    logger.info(f"\n🎯 Проверяю {pair}...")
-
-                    # Payout кэш
-                    if self.state.current_payout is None:
-                        live_payout = await check_payout(client, pair)
-                        if live_payout is None:
-                            logger.warning(f"⚠️ [{pair}] Payout не получен")
-                            self.state.change_pair("payout не получен")
-                            continue
-                        pmin, pmax = get_payout_range(pair)
-                        if live_payout < pmin or live_payout > pmax:
-                            logger.warning(
-                                f"⚠️ [{pair}] Payout {live_payout:.1f}% вне "
-                                f"[{pmin}, {pmax}]%"
-                            )
-                            self.state.change_pair("payout вне диапазона")
-                            continue
-                        self.state.current_payout = live_payout
-                        logger.info(f"💹 [{pair}] Payout {live_payout:.1f}% — OK")
-
-                                      # Анализ
-                    signal, entry_price = await full_analysis(client, pair)
-                    if signal is None:
-                        # Счётчик "Мало данных"
-                        self.empty_candles_count += 1
-                        if self.empty_candles_count >= 5:
-                            logger.warning("⚠️ 5 раз подряд 'Мало данных' — пауза 60 сек")
-                            await self.stopper.sleep(60)
-                            self.empty_candles_count = 0
-                            continue
-
-                        if self.state.on_skip() == "CHANGE_PAIR":
-                            await self.stopper.sleep(2)   # ← sleep при CHANGE_PAIR
-                            continue
-                        await self.stopper.sleep(5)
-                        continue
-                    else:
-                        self.empty_candles_count = 0   # ← СБРОС при успехе
-
-                    self.state.skip_streak = 0
-                    is_win = await run_martingale_series(
-                        client, pair, signal, self.stopper, self.state, entry_price
-                    )
-
-                    if is_win:
-                        self.state.on_win()
-                        logger.info(f"✅ Серия плюс — остаёмся на {pair}")
-                    else:
-                        self.state.on_loss()
-                        logger.info(f"❌ Серия минус — смена пары")
-                        self.state.change_pair("серия минус")
-
-                    # сброс error_streak — серия реально отработала
-                    self.error_streak = 0
-
-                    try:
-                        balance = float(await client.balance())
-                        logger.info(f"💰 Баланс: ${balance:.2f}")
-                    except Exception:
-                        pass
-
-                    await self.stopper.sleep(5)
-
-                except KeyboardInterrupt:
-                    break
-                except Exception as e:
-                    self.error_streak += 1
-                    logger.error(f"⚠️ Ошибка #{self.error_streak}/{self.max_error_streak}: {e}")
-
-                    if self.error_streak >= self.max_error_streak:
-                        logger.error(f"🛑 {self.max_error_streak} ошибок подряд — ПОЛНЫЙ СТОП")
-                        return
-
-                    logger.info("🔄 Переподключение через 30 сек...")
-                    await self.stopper.sleep(30)
-                    try:
-                        _ = await client.balance()
-                        logger.info("✅ Соединение живо")
-                        self.error_streak = 0   # соединение восстановлено
-                    except Exception as e2:
-                        logger.error(f"❌ Соединение потеряно: {e2}")
-                        logger.error("⏹ Требуется перезапуск")
-                        return
-
-            if self.state:
-                print("\n" + "=" * 60)
-                print(self.state.summary())
-                print("=" * 60)
-                logger.info(self.state.summary())
+        if self.state:
+            print("\n" + "=" * 60)
+            print(self.state.summary())
+            print("=" * 60)
+            logger.info(self.state.summary())
 
 
 # ==================== ИНТЕРАКТИВНОЕ МЕНЮ ====================
