@@ -881,6 +881,96 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
         return deal
 
 
+async def _find_signal_for_step_3(client, stopper, state):
+    """
+    Ищет сигнал для 3-й ступени (независимо, как 1-я).
+    Возвращает (pair, signal, entry_price) или (None, None, None).
+
+    Логика:
+    - Ждём начало 1м свечи
+    - full_analysis → (signal, entry)
+    - _check_momentum на закрытых 5s свечах
+    - при неудаче — смена пары + сброс signal/entry
+    """
+    pairs_tried = 0
+    max_pairs = len(state.pairs)
+    pass_num = 0
+    error_streak = 0
+    max_errors = CFG.get("max_error_streak", 5)
+    pause_sec = CFG.get("step3_pause_between_circles_sec", 30)
+
+    while True:
+        if stopper.requested():
+            return None, None, None
+
+        p = state.current_pair()
+        logger.info(f"   🔍 [{pass_num+1}-й круг] Ищу сигнал на {p}...")
+
+        try:
+            # 1. Payout
+            live_payout = await check_payout(client, p)
+            pmin, pmax = get_payout_range(p)
+            if live_payout is None or live_payout < pmin or live_payout > pmax:
+                logger.info(f"   ⏸ {p}: payout {live_payout} — смена пары")
+                state.change_pair("3-я (поиск): payout вне диапазона")
+                pairs_tried += 1
+                await stopper.sleep(2)
+                error_streak = 0
+                if pairs_tried >= max_pairs:
+                    pass_num += 1
+                    logger.info(f"   😴 Круг {pass_num} завершён — пауза {pause_sec} сек")
+                    await stopper.sleep(pause_sec)
+                    pairs_tried = 0
+                continue
+
+            # 2. Ждать начало 1м свечи
+            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                return None, None, None
+
+            # 3. Анализ
+            sig, entry = await full_analysis(client, p)
+            if sig is None:
+                logger.info(f"   ⏸ {p}: нет сигнала — смена пары")
+                state.change_pair("3-я (поиск): нет сигнала")
+                pairs_tried += 1
+                await stopper.sleep(2)
+                error_streak = 0
+                if pairs_tried >= max_pairs:
+                    pass_num += 1
+                    logger.info(f"   😴 Круг {pass_num} завершён — пауза {pause_sec} сек")
+                    await stopper.sleep(pause_sec)
+                    pairs_tried = 0
+                continue
+
+            # 4. Momentum check (на новой паре, entry — от неё же)
+            ok = await _check_momentum(client, p, sig, entry)
+            if not ok:
+                logger.info(f"   ⏸ {p}: momentum против — смена пары")
+                state.change_pair("3-я (поиск): momentum против")
+                pairs_tried += 1
+                await stopper.sleep(2)
+                error_streak = 0
+                if pairs_tried >= max_pairs:
+                    pass_num += 1
+                    logger.info(f"   😴 Круг {pass_num} завершён — пауза {pause_sec} сек")
+                    await stopper.sleep(pause_sec)
+                    pairs_tried = 0
+                continue
+
+            # 5. Всё ок — возвращаем
+            logger.info(f"   ✅ Найден сигнал на {p}: {sig} @ {entry}")
+            return p, sig, entry
+
+        except Exception as e:
+            error_streak += 1
+            logger.error(f"❌ Ошибка поиска 3-й #{error_streak}: {e}")
+            if error_streak >= max_errors:
+                logger.error(f"🛑 {max_errors} ошибок подряд — СТОП поиска 3-й")
+                return None, None, None
+            await stopper.sleep(5)
+            continue
+
+
 async def _open_step_3(client, pair: str, signal: str, entry_price: float,
                         steps: list, stopper, state=None):
     """
