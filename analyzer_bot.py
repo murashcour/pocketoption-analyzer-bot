@@ -1904,7 +1904,7 @@ def change_parameter(cfg: dict, key: str, current_value, ru_desc: str = "", en_d
     if isinstance(current_value, bool):
         hint = "True/False (или y/n, да/нет)"
     elif isinstance(current_value, list):
-        hint = "через запятую, напр.: 1, 2, 4, 8"
+        hint = "через запятую, напр.: 1, 2, 4 "
     elif isinstance(current_value, int):
         hint = "целое число"
     elif isinstance(current_value, float):
