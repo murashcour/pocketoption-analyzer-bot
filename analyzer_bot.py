@@ -1729,13 +1729,15 @@ class Trader:
                         logger.info(f"❌ Серия минус — смена пары")
                         self.state.change_pair("серия минус")
 
+                    # сброс error_streak — серия реально отработала
+                    self.error_streak = 0
+
                     try:
                         balance = float(await client.balance())
                         logger.info(f"💰 Баланс: ${balance:.2f}")
                     except Exception:
                         pass
 
-                    self.error_streak = 0   # ← СБРОС при успешной итерации
                     await self.stopper.sleep(5)
 
                 except KeyboardInterrupt:
