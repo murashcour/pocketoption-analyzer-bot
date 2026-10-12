@@ -99,6 +99,7 @@ DEFAULT_CONFIG = {
     "news_refresh_hours": 4,
     "news_fallback_stop": True,
     "momentum_timeout_sec": 4,
+    "wait_candle_start_enabled": True,
 }
 
 # ==================== ГЛОБАЛЬНЫЕ НАСТРОЙКИ ====================
@@ -718,9 +719,24 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
             )
             last_log_time = time.time()
 
-        # 1. Ждать начало 1м свечи
-        if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-            return None, None, None
+        # 1. Ждать начало 1м свечи (если включено)
+        if CFG.get("wait_candle_start_enabled", True):
+            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                return None, None, None
+        else:
+            # Не ждём — пересчитываем full_analysis для свежей entry
+            new_sig, new_entry = await full_analysis(client, pair)
+            if new_sig is None:
+                logger.info(f"   ⏸ 1-я: сигнал пропал на {pair} — смена пары")
+                if state is not None:
+                    state.change_pair("1-я: сигнал пропал")
+                    pair = state.current_pair()
+                    pairs_tried += 1
+                await stopper.sleep(2)
+                continue
+            if new_sig != signal:
+                logger.info(f"   ⚠ 1-я: сигнал изменился ({signal} → {new_sig}) — открываю новый")
+            signal, entry_price = new_sig, new_entry
 
         # 2. Momentum check
         ok = await _check_momentum(client, pair, signal, entry_price)
@@ -889,9 +905,10 @@ async def _find_signal_for_step_3(client, stopper, state):
                     pairs_tried = 0
                 continue
 
-            # 2. Ждать начало 1м свечи
-            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-                return None, None, None
+            # 2. Ждать начало 1м свечи (если включено)
+            if CFG.get("wait_candle_start_enabled", True):
+                if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                    return None, None, None
 
             # 3. Анализ
             sig, entry = await full_analysis(client, p)
@@ -963,9 +980,24 @@ async def _open_step_3(client, pair: str, signal: str, entry_price: float,
             )
             last_log_time = time.time()
 
-        # Ждать начало 1м свечи
-        if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-            return None, None
+        # Ждать начало 1м свечи (если включено)
+        if CFG.get("wait_candle_start_enabled", True):
+            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                return None, None
+        else:
+            # Не ждём — пересчитываем full_analysis для свежей entry
+            new_sig, new_entry = await full_analysis(client, pair)
+            if new_sig is None:
+                logger.info(f"   ⏸ 3-я: сигнал пропал на {pair} — смена пары")
+                if state is not None:
+                    state.change_pair("3-я: сигнал пропал")
+                    pair = state.current_pair()
+                    pairs_tried += 1
+                await stopper.sleep(2)
+                continue
+            if new_sig != signal:
+                logger.info(f"   ⚠ 3-я: сигнал изменился ({signal} → {new_sig}) — открываю новый")
+            signal, entry_price = new_sig, new_entry
 
         # Momentum check
         ok = await _check_momentum(client, pair, signal, entry_price)
