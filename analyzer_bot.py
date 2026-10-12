@@ -53,7 +53,10 @@ DEFAULT_CONFIG = {
     "max_checks": 3,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
-    "fixed_steps": [1.0, 2.0, 4.0],
+    "fixed_steps": [1.0, 2.0, 4.0, 4.0],
+    "martingale_steps_count": 4,
+    "martingale_enabled": True,
+    "check_interval_step4_sec": 45,
       # Payout (общие)
     "payout_min": 85,
     "payout_max": 92,
@@ -549,15 +552,26 @@ async def check_payout(client, asset: str) -> Optional[float]:
 # ==================== РАСЧЁТ СТУПЕНЕЙ ====================
 # ==================== MARTINGALE STEPS ====================
 def get_martingale_steps(balance: float) -> List[float]:
-    """Ступени мартингейла: при >= 100 → 1% и ×2, при < 100 → фикс."""
+    """
+    Ступени мартингейла.
+    Учитывает:
+      - martingale_enabled (вкл/выкл)
+      - martingale_steps_count (1..4)
+    """
+    count = max(1, min(int(CFG.get("martingale_steps_count", 3)), 4))
+
+    if not CFG.get("martingale_enabled", True):
+        # Только 1-я ступень
+        if balance < CFG["min_balance_for_percent"]:
+            return list(CFG["fixed_steps"])[:1]
+        base = round(balance * CFG["base_percent"] / 100, 2)
+        return [base]
+
     if balance < CFG["min_balance_for_percent"]:
-        return list(CFG["fixed_steps"])[:3]
+        return list(CFG["fixed_steps"])[:count]
+
     base = round(balance * CFG["base_percent"] / 100, 2)
-    return [
-        base,
-        round(base * 2, 2),
-        round(base * 4, 2),
-    ]
+    return [round(base * (2 ** i), 2) for i in range(count)]
 
 
 # ==================== STOP CHECKER ====================
@@ -780,6 +794,88 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
             continue
 
         return pair, deal, entry_price
+
+
+async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
+                        with_analysis: bool = False, state=None, entry_price: float = 0):
+    """
+    4-я ступень (зависимая от 3-й, как 2-я от 1-й).
+    with_analysis=False → СРАЗУ (без анализа).
+    with_analysis=True  → С АНАЛИЗОМ + цикл до открытия.
+    Возвращает (pair, deal) или (None, None).
+    """
+    if not with_analysis:
+        # === Вариант A: СРАЗУ (без анализа, без цикла) ===
+        logger.info(f"   📈 4-я ступень СРАЗУ (момент минус)")
+        deal = await _open_deal_raw(client, pair, 3, signal, steps, stopper, entry_price)
+        return pair, deal
+
+    # === Вариант B: С АНАЛИЗОМ + цикл ===
+    logger.info(f"   📈 4-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+
+    pass_number = 0
+    pairs_tried = 0
+    max_pairs = len(state.pairs) if state else 20
+    start_time = time.time()
+    last_log_time = start_time
+
+    while True:
+        if stopper.requested():
+            return None, None
+
+        # Progress каждые 5 минут
+        if time.time() - last_log_time >= 300:
+            elapsed_min = (time.time() - start_time) / 60
+            logger.info(
+                f"   🔍 Ищу 4-ю: круг {pass_number+1}, "
+                f"пар {pairs_tried}, время {elapsed_min:.0f} мин"
+            )
+            last_log_time = time.time()
+
+        # Анализ
+        new_signal, new_entry = await full_analysis(client, pair)
+        if new_signal is None:
+            logger.info(f"   ⏸ 4-я (анализ): нет сигнала на {pair} — смена пары")
+            if state is not None:
+                state.change_pair("4-я нет сигнала")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        logger.info(f"   ✅ 4-я (анализ): сигнал {new_signal} @ {new_entry}")
+
+        # Ждать начало 1м свечи (если включено)
+        if CFG.get("wait_candle_start_enabled", True):
+            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                return None, None
+
+        # Momentum check
+        ok = await _check_momentum(client, pair, new_signal, new_entry)
+        if not ok:
+            logger.info(f"   ⏸ 4-я (анализ): momentum против — меняю пару")
+            if state is not None:
+                state.change_pair("4-я momentum против")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        # Открыть
+        deal = await _open_deal_raw(client, pair, 3, new_signal, steps, stopper, new_entry)
+        if deal is None:
+            logger.warning(f"   ⚠ Ошибка открытия 4-й — повтор через 5 сек")
+            await stopper.sleep(5)
+            continue
+        return pair, deal
 
 
 async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
@@ -1155,13 +1251,68 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     await _wait_close(deal_3, stopper)
 
     try:
+        B_after_3 = float(await client.balance())
+    except Exception as e:
+        logger.error(f"Не удалось получить баланс: {e}")
+        return False
+
+    delta_3 = B_after_3 - B_start
+    logger.info(f"🏁 Итог 1+2+3: ${B_start:.2f} → ${B_after_3:.2f} (Δ {delta_3:+.2f})")
+
+    if delta_3 > 0:
+        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_3:+.2f})")
+        return True
+
+    # ===== ШАГ 6: 4-я ступень (если включена и есть в steps) =====
+    if len(steps) < 4:
+        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_3:+.2f}) — 4-й нет в config (steps={len(steps)})")
+        return False
+
+    logger.info(f"❌ Итог 1+2+3 минус (Δ {delta_3:+.2f}) — 4-я ступень")
+
+    # T+45 (свой параметр для 4-й) — проверка в моменте
+    step4_interval = CFG.get("check_interval_step4_sec", 45)
+    logger.info(f"⏳ Ждём T+{step4_interval} для 4-й...")
+    await stopper.sleep(step4_interval)
+    if stopper.requested():
+        logger.warning("⏹ Остановка во время серии")
+        return False
+
+    action_4 = await _check_first_30s(client, pair_3, signal_3, entry_3)
+
+    deal_4 = None
+
+    if action_4 == "STEP2_NOW":
+        # Момент минус → 4-я СРАЗУ (без анализа)
+        logger.info(f"   → 4-я СРАЗУ (момент минус в T+{step4_interval})")
+        pair_4, deal_4 = await _open_step_4(
+            client, pair_3, signal_3, steps, stopper,
+            with_analysis=False, state=state, entry_price=entry_3
+        )
+    else:  # WAIT_CLOSE
+        # Момент плюс → 3-я уже закрыта (в минус, раз мы здесь)
+        # Значит — 4-я С АНАЛИЗОМ
+        logger.info(f"   → 3-я закрылась в минус → 4-я С АНАЛИЗОМ")
+        pair_4, deal_4 = await _open_step_4(
+            client, pair_3, signal_3, steps, stopper,
+            with_analysis=True, state=state, entry_price=entry_3
+        )
+
+    if deal_4 is None:
+        logger.info(f"❌ 4-я не открыта — серия закрыта")
+        return False
+
+    # ===== ШАГ 7: Ждём закрытия 4-й =====
+    await _wait_close(deal_4, stopper)
+
+    try:
         B_final = float(await client.balance())
     except Exception as e:
         logger.error(f"Не удалось получить баланс: {e}")
         return False
 
     delta_final = B_final - B_start
-    logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
+    logger.info(f"🏁 СЕРИЯ закрыта (4 ступени): ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
 
     if delta_final > 0:
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})")
