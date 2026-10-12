@@ -1455,11 +1455,125 @@ async def load_currency_pairs(client) -> List[str]:
     return pairs
 # ==================== ОСНОВНОЙ ЦИКЛ ====================
 # ==================== MAIN LOOP ====================
+async def run_manual_mode(client, state, stopper, mode):
+    """
+    Ручной режим: бот показывает сигналы, пользователь решает.
+
+    mode:
+      "show-only" — только показывает, ничего не открывает
+      "confirm"   — показывает, спрашивает, открывает по y
+
+    Команды в процессе:
+      Enter  — продолжить (та же пара)
+      s      — сменить пару
+      q      — выход
+    """
+    logger.info(f"🎮 РУЧНОЙ РЕЖИМ: {mode}")
+    logger.info("   Команды: Enter=продолжить, s=сменить пару, q=выход")
+
+    while True:
+        if stopper.requested():
+            return
+
+        pair = state.current_pair()
+        logger.info(f"\n🎯 Проверяю {pair}...")
+
+        # Payout
+        live_payout = await check_payout(client, pair)
+        pmin, pmax = get_payout_range(pair)
+        if live_payout is None or live_payout < pmin or live_payout > pmax:
+            logger.warning(f"⚠ [{pair}] Payout {live_payout}% вне [{pmin}, {pmax}]%")
+            state.change_pair("ручной: payout вне диапазона")
+            continue
+
+        logger.info(f"💹 [{pair}] Payout {live_payout:.1f}% — OK")
+
+        # Анализ
+        signal, entry_price = await full_analysis(client, pair)
+        now = datetime.now().strftime('%H:%M:%S')
+
+        if signal:
+            logger.info(f"\n🎯 [{now}] СИГНАЛ: {signal} на {pair} @ {entry_price}")
+            logger.info(f"   👉 Переключитесь на {pair} в PocketOption")
+
+            # Пауза до Enter
+            ans = await asyncio.to_thread(
+                input, "   Нажмите Enter, когда готовы [q=выход]: "
+            )
+            ans = ans.strip().lower()
+            if ans == "q":
+                logger.info("⏹ Выход из ручного режима")
+                return
+
+            if mode == "confirm":
+                # Спросить ставку
+                bet_str = await asyncio.to_thread(
+                    input, "   Ставка? [1 / 2 / 4 / custom]: "
+                )
+                bet_str = bet_str.strip().lower()
+                if bet_str == "q":
+                    return
+
+                if bet_str in ("", "1"):
+                    bet = 1.0
+                elif bet_str == "2":
+                    bet = 2.0
+                elif bet_str == "4":
+                    bet = 4.0
+                else:
+                    try:
+                        bet = float(bet_str)
+                    except ValueError:
+                        logger.warning("   ⚠ Неверная ставка — пропускаю")
+                        bet = None
+
+                if bet:
+                    # Спросить: открывать?
+                    ans = await asyncio.to_thread(
+                        input, f"   Открыть {signal} ${bet:.2f}? [y/n/s/q]: "
+                    )
+                    ans = ans.strip().lower()
+
+                    if ans == "q":
+                        return
+                    elif ans in ("y", "yes", "д", "да"):
+                        deal = await _open_deal_raw(
+                            client, pair, 0, signal, [bet], stopper, entry_price
+                        )
+                        if deal:
+                            logger.info(f"✅ Открыл {signal} ${bet:.2f} на {pair}")
+                            ans = await asyncio.to_thread(
+                                input, "   Ждать закрытия? [Enter=да / n=нет]: "
+                            )
+                            if ans.strip().lower() not in ("n", "no", "н", "нет"):
+                                await _wait_close(deal, stopper)
+                    elif ans == "s":
+                        state.change_pair("ручной: смена пары")
+                        continue
+                    # n или другое — пропустить
+
+        else:
+            logger.info(f"⏸ [{now}] Пропуск на {pair}")
+
+        # Спросить: продолжить?
+        ans = await asyncio.to_thread(
+            input, "   Продолжить? [Enter=та же пара / s=сменить / q=выход]: "
+        )
+        ans = ans.strip().lower()
+
+        if ans == "q":
+            logger.info("⏹ Выход из ручного режима")
+            return
+        elif ans == "s":
+            state.change_pair("ручной: смена пары")
+
+
 class Trader:
     """Основной торговый цикл."""
 
-    def __init__(self, ssid: str):
+    def __init__(self, ssid: str, manual_mode: str = None):
         self.ssid = ssid
+        self.manual_mode = manual_mode
         self.stopper = StopChecker()
         self.state: Optional[TraderState] = None
         self.empty_candles_count = 0
@@ -1522,6 +1636,12 @@ class Trader:
             return
 
         self.state = TraderState(pairs)
+
+        # === РУЧНОЙ РЕЖИМ ===
+        if self.manual_mode:
+            logger.info(f"🎮 РУЧНОЙ РЕЖИМ: {self.manual_mode}")
+            await run_manual_mode(client, self.state, self.stopper, self.manual_mode)
+            return
         logger.info(f"💡 Остановка: Ctrl+C или создай файл stop.flag")
         logger.info(
             f"📊 Настройки: EXPIRATION={CFG['expiration']}s, "
@@ -1955,6 +2075,15 @@ def validate_ssid(ssid: str) -> bool:
 async def main():
     global CFG
 
+    # === РАЗБОР ФЛАГОВ ===
+    manual_mode = None
+    if "--show-only" in sys.argv:
+        manual_mode = "show-only"
+    if "--confirm" in sys.argv:
+        manual_mode = "confirm"   # приоритет у --confirm
+    if manual_mode:
+        print(f"\n🎮 РУЧНОЙ РЕЖИМ: {manual_mode}")
+
     setup_logging()
 
     print("\n" + "=" * 60)
@@ -2029,7 +2158,7 @@ async def main():
     print("=" * 60 + "\n")
 
     # Запуск
-    trader = Trader(ssid)
+    trader = Trader(ssid, manual_mode=manual_mode)
     await trader.run()
 
 
