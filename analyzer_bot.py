@@ -798,13 +798,6 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                 pairs_tried = 0
             continue
 
-        # 3. Открыть
-        deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper, entry_price)
-        if deal is None:
-            logger.warning(f"   ⚠️ Ошибка открытия — повтор через 5 сек")
-            await stopper.sleep(5)
-            continue
-
         deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper, entry_price)
         if deal is None:
             logger.warning(f"   ⚠ Ошибка открытия — повтор через 5 сек")
