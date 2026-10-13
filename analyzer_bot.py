@@ -1608,6 +1608,63 @@ async def run_manual_mode(client, state, stopper, mode):
             state.change_pair("ручной: смена пары")
 
 
+def get_reference_step(balance: float) -> float:
+    """
+    Возвращает 'полку' reference для баланса.
+
+    Сетка:
+      0..100:    шаг 10
+      100..200:  шаг 10
+      200..400:  шаг 20
+      400..800:  шаг 40
+      800..1600: шаг 80
+      ... (шаг × 2 каждое удвоение)
+
+    balance < 10 → 0
+    """
+    if balance < 10:
+        return 0.0
+    if balance < 100:
+        return float(int(balance // 10) * 10)
+
+    step = 10
+    start = 100
+    while start * 2 <= balance:
+        start *= 2
+        step *= 2
+
+    while start + step <= balance:
+        start += step
+    return float(start)
+
+
+def get_next_reference_step(balance: float) -> float:
+    """Следующая полка для баланса."""
+    current = get_reference_step(balance)
+
+    if current < 100:
+        return current + 10
+    if current < 200:
+        return current + 10
+    if current < 400:
+        return current + 20
+    if current < 800:
+        return current + 40
+    if current < 1600:
+        return current + 80
+    if current < 3200:
+        return current + 160
+    if current < 6400:
+        return current + 320
+    # Дальше — шаг × 2 каждое удвоение
+    step = 640
+    start = 6400
+    while start + step <= current:
+        start *= 2
+        step *= 2
+    return current + step
+
+
 class Trader:
     """Основной торговый цикл."""
 
@@ -1725,13 +1782,14 @@ class Trader:
                             f"${self.reference_balance:.2f}) — пропускаю проверку."
                         )
                     else:
-                        # === REFERENCE UPDATE (+10%) ===
-                        if current_balance >= self.reference_balance * 1.10:
-                            old_ref = self.reference_balance
-                            self.reference_balance = current_balance
+                        # === REFERENCE UPDATE (сетка, только вверх) ===
+                        _new_ref = get_reference_step(current_balance)
+                        if _new_ref > self.reference_balance:
+                            _old_ref = self.reference_balance
+                            self.reference_balance = _new_ref
                             logger.info(
                                 f"📈 Reference обновлён: "
-                                f"${old_ref:.2f} → ${current_balance:.2f} (+10%)"
+                                f"${_old_ref:.0f} → ${_new_ref:.0f}"
                             )
 
                         # === ПРОВЕРКА ПРОСАДКИ ===
@@ -1769,10 +1827,12 @@ class Trader:
                         _threshold = self.reference_balance * (
                             1 - CFG["max_drawdown_percent"] / 100
                         )
+                        _next_ref = get_next_reference_step(self.reference_balance)
                         _msg = (
-                            f"💰 Reference: ${self.reference_balance:.2f} | "
-                            f"Текущий: ${_bal_now:.2f} | "
-                            f"Порог просадки: ${_threshold:.2f}"
+                            f"💰 Ref: ${self.reference_balance:.0f} | "
+                            f"Баланс: ${_bal_now:.2f} | "
+                            f"Просадка: ${_threshold:.0f} | "
+                            f"Следующая: ${_next_ref:.0f}"
                         )
                         logger.info(_msg)
                         # Синий цвет в консоль
