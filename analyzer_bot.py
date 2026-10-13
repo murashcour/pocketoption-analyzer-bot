@@ -631,6 +631,17 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
     """
     try:
         bet = steps[step_idx]
+
+        # Реальная entry — свежая цена на момент открытия
+        try:
+            real_price = await get_current_price(client, p)
+            if real_price and real_price > 0:
+                if abs(real_price - entry_price) > 0:
+                    logger.info(f"   [entry] analysis={entry_price:.5f} → real={real_price:.5f}")
+                entry_price = real_price
+        except Exception:
+            pass
+
         t0 = time.time()
         if sig == "CALL":
             trade_id, _ = await client.buy(p, bet, CFG["expiration"])
@@ -674,7 +685,19 @@ async def _check_first_30s(client, pair: str, signal: str, entry_price: float):
       "WAIT_CLOSE" — момент плюс → ждём закрытия 1-й
     """
     try:
-        current_price = await get_current_price(client, pair)
+        # 5s свеча (закрытая) — свежее, чем forming 1m
+        try:
+            c5 = await asyncio.wait_for(
+                client.get_candles(pair, 5, 3),
+                timeout=4
+            )
+            if c5 and len(c5) >= 2:
+                current_price = get_close(c5[-2])
+            else:
+                current_price = await get_current_price(client, pair)
+        except Exception:
+            current_price = await get_current_price(client, pair)
+
         if current_price is None:
             logger.warning(f"   ⚠️ Цена не получена при T+30 — STEP2_NOW (безопасно)")
             return "STEP2_NOW"
@@ -1716,7 +1739,7 @@ class Trader:
 
         # === ИНИЦИАЛИЗАЦИЯ ПРОСАДКИ ===
         self.initial_balance = balance
-        self.reference_balance = balance
+        self.reference_balance = get_reference_step(balance)
         self.drawdown_count = 0
         logger.info(
             f"🛡 Защита от просадки: {CFG['max_drawdown_percent']}%, "
