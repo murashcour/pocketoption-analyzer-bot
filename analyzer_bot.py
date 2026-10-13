@@ -805,6 +805,14 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
             await stopper.sleep(5)
             continue
 
+        deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper, entry_price)
+        if deal is None:
+            logger.warning(f"   ⚠ Ошибка открытия — повтор через 5 сек")
+            await stopper.sleep(5)
+            continue
+
+        # Обновить entry_price из deal (реальная цена открытия)
+        entry_price = deal["entry"]
         return pair, deal, entry_price
 
 
