@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0, 2.0, 4.0],
+    "martingale_steps_count": 2,
       # Payout (общие)
     "payout_min": 85,
     "payout_max": 92,
@@ -549,15 +550,17 @@ async def check_payout(client, asset: str) -> Optional[float]:
 # ==================== РАСЧЁТ СТУПЕНЕЙ ====================
 # ==================== MARTINGALE STEPS ====================
 def get_martingale_steps(balance: float) -> List[float]:
-    """Ступени мартингейла: при >= 100 → 1% и ×2, при < 100 → фикс."""
+    """
+    Ступени мартингейла.
+    Количество — из CFG["martingale_steps_count"] (1, 2 или 3).
+    """
+    count = max(1, min(int(CFG.get("martingale_steps_count", 2)), 3))
+
     if balance < CFG["min_balance_for_percent"]:
-        return list(CFG["fixed_steps"])[:3]
+        return list(CFG["fixed_steps"])[:count]
+
     base = round(balance * CFG["base_percent"] / 100, 2)
-    return [
-        base,
-        round(base * 2, 2),
-        round(base * 4, 2),
-    ]
+    return [round(base * (2 ** i), 2) for i in range(count)]
 
 
 # ==================== STOP CHECKER ====================
@@ -1135,6 +1138,11 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     if delta_2 > 0:
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})")
         return True
+
+    # ===== ПРОВЕРКА: есть ли 3-я ступень в steps? =====
+    if len(steps) < 3:
+        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_2:+.2f}) — 3-й нет в config (steps={len(steps)})")
+        return False
 
     # ===== ШАГ 4: 3-я ступень =====
     logger.info(f"❌ Итог 1+2 минус (Δ {delta_2:+.2f}) — ищу сигнал для 3-й")
