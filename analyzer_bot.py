@@ -433,7 +433,7 @@ def check_volatility(candles: List, price: float) -> Tuple[bool, str]:
 # ==================== FULL ANALYSIS ====================
 
 async def full_analysis(client, pair: str):
-    """Мульти-ТФ анализ: 1м + 3м + 10м + S/R + ATR. Возвращает (signal, price)."""
+    """Мульти-ТФ анализ: 1м + 5м + 15м + S/R + ATR. Возвращает (signal, price)."""
     # ===== БЫСТРАЯ ПРОВЕРКА: ТОЛЬКО 1м =====
     c1 = await fetch_candles(client, pair, 60, 100)
     if not c1 or len(c1) < 50:
@@ -445,8 +445,8 @@ async def full_analysis(client, pair: str):
         return None, None      # ← выходим БЕЗ загрузки 3м и 10м
 
     # ===== 1м ДАЛ СИГНАЛ — грузим 3м и 10м =====
-    c3  = await fetch_candles(client, pair, 180, 100)
-    c10 = await fetch_candles(client, pair, 600, 50)
+    c5  = await fetch_candles(client, pair, 300, 100)
+    c15 = await fetch_candles(client, pair, 900, 50)
 
     price = get_close(c1[-1])
 
@@ -465,32 +465,32 @@ async def full_analysis(client, pair: str):
         return None, None
 
     # 3м
-    if c3 and len(c3) >= 30:
-        sig_3m = analyze_3m(c3)
+    if c5 and len(c5) >= 30:
+        sig_3m = analyze_3m(c5)
         if sig_3m is None:
             if CFG["tf_3m_neutral_blocks"]:
-                logger.info(f"   [3м] нейтрально — блокирую")
+                logger.info(f"   [5м] нейтрально — блокирую")
                 return None, None
-            logger.info(f"   [3м] нейтрально — пропускаю")
+            logger.info(f"   [5м] нейтрально — пропускаю")
         elif sig_3m != sig_1m:
-            logger.info(f"   [3м] {sig_3m} — конфликт с 1м ({sig_1m})")
+            logger.info(f"   [5м] {sig_3m} — конфликт с 1м ({sig_1m})")
             return None, None
         else:
-            logger.info(f"   [3м] {sig_3m} — совпадает с 1м ✓")
+            logger.info(f"   [5м] {sig_3m} — совпадает с 1м ✓")
     else:
-        logger.info(f"   [{pair}] 3м мало данных")
+        logger.info(f"   [{pair}] 5м мало данных")
 
     # 10м
-    if c10 and len(c10) >= 30:
-        ok, msg = analyze_10m_filter(c10, "10м")
+    if c15 and len(c15) >= 30:
+        ok, msg = analyze_10m_filter(c15, "15м")
         logger.info(f"   [{msg}]")
         if not ok:
-            logger.info(f"   [{pair}] 10м блокирует сделку")
+            logger.info(f"   [{pair}] 15м блокирует сделку")
             return None, None
     else:
-        logger.info(f"   [{pair}] 10м мало данных")
+        logger.info(f"   [{pair}] 15м мало данных")
 
-    logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 3м + 10м + S/R + ATR OK) @ {price}")
+    logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 5м + 15м + S/R + ATR OK) @ {price}")
     return sig_1m, price
 
 # ==================== PAYOUT ====================
