@@ -1101,47 +1101,37 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.info(f"⏸ СЕРИЯ прервана: не удалось открыть 1-ю")
         return False
 
-    # ===== ШАГ 2: T+30 проверка =====
-    await stopper.sleep(CFG["check_interval_sec"])
+    # ===== ШАГ 2: Ждём закрытия 1-й =====
+    logger.info(f"⏳ Ждём закрытия 1-й ступени...")
+    await _wait_close(deal_1, stopper)
+
     if stopper.requested():
         logger.warning("⏹ Остановка во время серии")
         return False
 
-    action = await _check_first_30s(client, pair, signal, entry_1)
+    try:
+        B_after_1 = float(await client.balance())
+    except Exception as e:
+        logger.error(f"Не удалось получить баланс: {e}")
+        return False
 
-    deal_2 = None
+    delta_1 = B_after_1 - B_start
+    logger.info(f"🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})")
 
-    if action == "STEP2_NOW":
-        # Момент минус → 2-я СРАЗУ (без анализа)
-        logger.info(f"   → 2-я СРАЗУ (момент минус в T+30)")
-        pair, deal_2 = await _open_step_2(
-            client, pair, signal, steps, stopper,
-            with_analysis=False, state=state, entry_price=entry_1
-        )
-    else:  # WAIT_CLOSE
-        # Момент плюс → ждём закрытия 1-й
-        logger.info(f"   → 1-я в плюсе в моменте, ждём закрытия")
-        await _wait_close(deal_1, stopper)
+    if delta_1 > 0:
+        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})")
+        return True
 
-        try:
-            B_after_1 = float(await client.balance())
-        except Exception as e:
-            logger.error(f"Не удалось получить баланс: {e}")
-            return False
+    # Реально минус → 2-я С АНАЛИЗОМ
+    if len(steps) < 2:
+        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_1:+.2f}) — 2-й нет в config")
+        return False
 
-        delta_1 = B_after_1 - B_start
-        logger.info(f"🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})")
-
-        if delta_1 > 0:
-            logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})")
-            return True
-
-        # Реально минус → 2-я С АНАЛИЗОМ (ФИКС #11)
-        logger.info(f"   → 1-я закрылась в минус → 2-я С АНАЛИЗОМ")
-        pair, deal_2 = await _open_step_2(
-            client, pair, signal, steps, stopper,
-            with_analysis=True, state=state, entry_price=entry_1
-        )
+    logger.info(f"   → 1-я закрылась в минус → 2-я С АНАЛИЗОМ")
+    pair, deal_2 = await _open_step_2(
+        client, pair, signal, steps, stopper,
+        with_analysis=True, state=state, entry_price=entry_1
+    )
 
     if deal_2 is None:
         logger.info(f"❌ 2-я не открыта — серия закрыта")
