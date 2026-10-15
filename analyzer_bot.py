@@ -480,12 +480,18 @@ async def full_analysis(client, pair: str):
     else:
         logger.info(f"   [{pair}] 5м мало данных")
 
-    # 10м
+    # 15м — как 5м + extreme RSI
     if c15 and len(c15) >= 30:
+        # Конфликт направления (как 5м)
+        sig_15m = analyze_3m(c15)
+        if sig_15m is not None and sig_15m != sig_1m:
+            logger.info(f"   [15м] {sig_15m} — конфликт с 1м ({sig_1m})")
+            return None, None
+        # Extreme RSI
         ok, msg = analyze_10m_filter(c15, "15м")
         logger.info(f"   [{msg}]")
         if not ok:
-            logger.info(f"   [{pair}] 15м блокирует сделку")
+            logger.info(f"   [{pair}] 15м блокирует сделку (RSI extreme)")
             return None, None
     else:
         logger.info(f"   [{pair}] 15м мало данных")
