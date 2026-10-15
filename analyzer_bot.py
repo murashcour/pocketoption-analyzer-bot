@@ -101,6 +101,7 @@ DEFAULT_CONFIG = {
     "news_fallback_stop": True,
     "momentum_timeout_sec": 4,
     "wait_candle_start_enabled": True,
+    "log_timezone_offset_hours": 3,
 }
 
 # ==================== ГЛОБАЛЬНЫЕ НАСТРОЙКИ ====================
@@ -113,7 +114,19 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging():
-    """Настройка логирования в файл и консоль."""
+    """Настройка логирования с TZ из config (log_timezone_offset_hours)."""
+    import time as _time
+
+    # Смещение TZ из config (часы). По умолчанию 3 (МСК).
+    offset_hours = CFG.get("log_timezone_offset_hours", 3)
+    offset_sec = int(offset_hours * 3600)
+
+    def _tz_converter(timestamp):
+        """Сдвигает UTC-время на offset_hours."""
+        return _time.gmtime(timestamp + offset_sec)
+
+    logging.Formatter.converter = _tz_converter
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s | %(levelname)s | %(message)s',
