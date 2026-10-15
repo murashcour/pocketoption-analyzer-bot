@@ -631,17 +631,6 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
     """
     try:
         bet = steps[step_idx]
-
-        # Реальная entry — свежая цена на момент открытия
-        try:
-            real_price = await get_current_price(client, p)
-            if real_price and real_price > 0:
-                if abs(real_price - entry_price) > 0:
-                    logger.info(f"   [entry] analysis={entry_price:.5f} → real={real_price:.5f}")
-                entry_price = real_price
-        except Exception:
-            pass
-
         t0 = time.time()
         if sig == "CALL":
             trade_id, _ = await client.buy(p, bet, CFG["expiration"])
