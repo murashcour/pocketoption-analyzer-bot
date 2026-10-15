@@ -121,8 +121,9 @@ def setup_logging():
     offset_hours = CFG.get("log_timezone_offset_hours", 3)
     offset_sec = int(offset_hours * 3600)
 
-    def _tz_converter(timestamp):
-        """Сдвигает UTC-время на offset_hours."""
+    def _tz_converter(*args):
+        """Сдвигает UTC-время на offset_hours (Python 3.12)."""
+        timestamp = args[-1]
         return _time.gmtime(timestamp + offset_sec)
 
     logging.Formatter.converter = _tz_converter
