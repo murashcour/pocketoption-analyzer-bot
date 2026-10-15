@@ -452,11 +452,11 @@ async def full_analysis(client, pair: str):
     c1 = await fetch_candles(client, pair, 60, 100)
     if not c1 or len(c1) < 50:
         logger.info(f"   [{pair}] Мало данных 1м")
-        return None, None
+        return None, None, "NO_DATA"
 
     sig_1m = analyze_1m(c1)
     if sig_1m is None:
-        return None, None      # ← выходим БЕЗ загрузки 3м и 10м
+        return None, None, "NO_SIGNAL"
 
     # ===== 1м ДАЛ СИГНАЛ — грузим 3м и 10м =====
     c5  = await fetch_candles(client, pair, 300, 100)
@@ -468,7 +468,7 @@ async def full_analysis(client, pair: str):
     ok_vol, msg_vol = check_volatility(c1, price)
     logger.info(f"   [Волатильность] {msg_vol}")
     if not ok_vol:
-        return None, None
+        return None, None, "ATR"
 
     # S/R
     support, resistance = find_support_resistance(c1)
@@ -476,7 +476,7 @@ async def full_analysis(client, pair: str):
     logger.info(f"   [S/R] {msg_sr}")
     if not ok_sr:
         logger.info(f"   [{pair}] S/R блокирует сделку")
-        return None, None
+        return None, None, "SR"
 
     # 3м
     if c5 and len(c5) >= 30:
@@ -484,11 +484,11 @@ async def full_analysis(client, pair: str):
         if sig_3m is None:
             if CFG["tf_3m_neutral_blocks"]:
                 logger.info(f"   [5м] нейтрально — блокирую")
-                return None, None
+                return None, None, "CONFLICT_5M"
             logger.info(f"   [5м] нейтрально — пропускаю")
         elif sig_3m != sig_1m:
             logger.info(f"   [5м] {sig_3m} — конфликт с 1м ({sig_1m})")
-            return None, None
+            return None, None, "CONFLICT_5M"
         else:
             logger.info(f"   [5м] {sig_3m} — совпадает с 1м ✓")
     else:
@@ -500,18 +500,18 @@ async def full_analysis(client, pair: str):
         sig_15m = analyze_3m(c15)
         if sig_15m is not None and sig_15m != sig_1m:
             logger.info(f"   [15м] {sig_15m} — конфликт с 1м ({sig_1m})")
-            return None, None
+            return None, None, "CONFLICT_15M"
         # Extreme RSI
         ok, msg = analyze_10m_filter(c15, "15м")
         logger.info(f"   [{msg}]")
         if not ok:
             logger.info(f"   [{pair}] 15м блокирует сделку (RSI extreme)")
-            return None, None
+            return None, None, "CONFLICT_15M"
     else:
         logger.info(f"   [{pair}] 15м мало данных")
 
     logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 5м + 15м + S/R + ATR OK) @ {price}")
-    return sig_1m, price
+    return sig_1m, price, "OK"
 
 # ==================== PAYOUT ====================
 # ==================== PAYOUT ====================
@@ -760,7 +760,7 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                 return None, None, None
         else:
             # Не ждём — пересчитываем full_analysis для свежей entry
-            new_sig, new_entry = await full_analysis(client, pair)
+            new_sig, new_entry, _ = await full_analysis(client, pair)
             if new_sig is None:
                 logger.info(f"   ⏸ 1-я: сигнал пропал на {pair} — смена пары")
                 if state is not None:
@@ -792,7 +792,7 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                         pairs_tried = 0
                     continue
 
-                new_sig, new_entry = await full_analysis(client, pair)
+                new_sig, new_entry, _ = await full_analysis(client, pair)
                 if new_sig is not None:
                     signal, entry_price = new_sig, new_entry
                     continue
@@ -855,7 +855,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
             last_log_time = time.time()
 
         # Анализ
-        new_signal, new_entry = await full_analysis(client, pair)
+        new_signal, new_entry, _ = await full_analysis(client, pair)
         if new_signal is None:
             logger.info(f"   ⏸ 2-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
@@ -925,7 +925,7 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
             )
             last_log_time = time.time()
 
-        new_signal, new_entry = await full_analysis(client, pair)
+        new_signal, new_entry, _ = await full_analysis(client, pair)
         if new_signal is None:
             logger.info(f"   ⏸ 3-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
@@ -993,7 +993,7 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
             )
             last_log_time = time.time()
 
-        new_signal, new_entry = await full_analysis(client, pair)
+        new_signal, new_entry, _ = await full_analysis(client, pair)
         if new_signal is None:
             logger.info(f"   ⏸ 4-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
@@ -1534,7 +1534,7 @@ async def run_manual_mode(client, state, stopper, mode):
         logger.info(f"💹 [{pair}] Payout {live_payout:.1f}% — OK")
 
         # Анализ
-        signal, entry_price = await full_analysis(client, pair)
+        signal, entry_price, _ = await full_analysis(client, pair)
         now = datetime.now().strftime('%H:%M:%S')
 
         if signal:
@@ -1886,23 +1886,26 @@ class Trader:
                     logger.info(f"💹 [{pair}] Payout {live_payout:.1f}% — OK")
 
                                   # Анализ
-                signal, entry_price = await full_analysis(client, pair)
+                signal, entry_price, reason = await full_analysis(client, pair)
                 if signal is None:
-                    # Счётчик "Мало данных"
-                    self.empty_candles_count += 1
-                    if self.empty_candles_count >= 5:
-                        logger.warning("⚠️ 5 раз подряд 'Мало данных' — пауза 60 сек")
-                        await self.stopper.sleep(60)
+                    # Пауза — только при NO_DATA (API не отдаёт свечи)
+                    if reason == "NO_DATA":
+                        self.empty_candles_count += 1
+                        if self.empty_candles_count >= 5:
+                            logger.warning("API не отдаёт свечи 5 раз подряд — пауза 60 сек")
+                            await self.stopper.sleep(60)
+                            self.empty_candles_count = 0
+                            continue
+                    else:
                         self.empty_candles_count = 0
-                        continue
 
                     if self.state.on_skip() == "CHANGE_PAIR":
-                        await self.stopper.sleep(2)   # ← sleep при CHANGE_PAIR
+                        await self.stopper.sleep(2)
                         continue
                     await self.stopper.sleep(5)
                     continue
                 else:
-                    self.empty_candles_count = 0   # ← СБРОС при успехе
+                    self.empty_candles_count = 0
 
                 self.state.skip_streak = 0
                 is_win = await run_martingale_series(
