@@ -54,7 +54,7 @@ DEFAULT_CONFIG = {
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0, 2.0, 4.0],
-    "martingale_steps_count": 2,
+    "martingale_steps_count": 4,
       # Payout (общие)
     "payout_min": 85,
     "payout_max": 92,
@@ -572,9 +572,9 @@ async def check_payout(client, asset: str) -> Optional[float]:
 def get_martingale_steps(balance: float) -> List[float]:
     """
     Ступени мартингейла.
-    Количество — из CFG["martingale_steps_count"] (1, 2 или 3).
+    Количество — из CFG["martingale_steps_count"] (1, 2, 3 или 4).
     """
-    count = max(1, min(int(CFG.get("martingale_steps_count", 2)), 3))
+    count = max(1, min(int(CFG.get("martingale_steps_count", 2)), 4))
 
     if balance < CFG["min_balance_for_percent"]:
         return list(CFG["fixed_steps"])[:count]
