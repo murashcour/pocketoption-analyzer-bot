@@ -1688,6 +1688,10 @@ class Trader:
         self.max_runtime_sec = CFG.get("max_runtime_hours", 24) * 3600
         self.error_streak = 0
         self.max_error_streak = CFG.get("max_error_streak", 5)
+        # Пауза при N минусах подряд
+        self.consecutive_losses = 0
+        self.max_consecutive_losses = CFG.get("pause_after_losses", 4)
+        self.pause_after_losses_sec = CFG.get("pause_after_losses_sec", 1800)
 
     async def run(self):
         """Внешний цикл реконнекта при потере соединения."""
@@ -1915,10 +1919,20 @@ class Trader:
                 if is_win:
                     self.state.on_win()
                     logger.info(f"✅ Серия плюс — остаёмся на {pair}")
+                    self.consecutive_losses = 0
                 else:
                     self.state.on_loss()
-                    logger.info(f"❌ Серия минус — смена пары")
+                    self.consecutive_losses += 1
+                    logger.info(f"❌ Серия минус (подряд: {self.consecutive_losses}/{self.max_consecutive_losses}) — смена пары")
                     self.state.change_pair("серия минус")
+
+                    # Пауза при N минусах подряд
+                    if self.consecutive_losses >= self.max_consecutive_losses:
+                        pause_min = self.pause_after_losses_sec // 60
+                        logger.warning(f"🛑 {self.consecutive_losses} минусов подряд — пауза {pause_min} мин")
+                        await self.stopper.sleep(self.pause_after_losses_sec)
+                        self.consecutive_losses = 0
+                        logger.info(f"✅ Пауза окончена — продолжаю")
 
                 # сброс error_streak — серия реально отработала
                 self.error_streak = 0
