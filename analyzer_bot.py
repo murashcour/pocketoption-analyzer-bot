@@ -668,7 +668,7 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
             "step": step_idx + 1,
         }
         dir_str = "ВВЕРХ ⬆️ (CALL)" if sig == "CALL" else "ВНИЗ ⬇️ (PUT)"
-        logger.info(f"📈 [{step_idx+1}/3] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек)")
+        logger.info(f"📈 [{step_idx+1}/{len(steps)}] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек)")  # FIX_STEP_LOG
         return deal
     except (PocketOptionError, ConnectionError, OSError) as e:
         logger.error(f"❌ СЕТЕВАЯ ошибка открытия ${steps[step_idx]:.2f}: {e}")
