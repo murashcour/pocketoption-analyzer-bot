@@ -55,4 +55,5 @@ credentials.json
 Thumbs.db
 desktop.ini
 *.kate-swp
-analyzer_bot.py.bak.*
+analyzer_bot.py.bak*
+patch_*.py
