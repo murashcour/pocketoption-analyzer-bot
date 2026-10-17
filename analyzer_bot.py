@@ -871,9 +871,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
 
         logger.info(f"   ✅ 2-я (анализ): сигнал {new_signal} @ {new_entry}")
 
-        # Ждать начало 1м свечи
-        if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-            return None, None
+        # NO_WAIT_STEP_2_3: 2-я ступень — сразу после анализа (догон)
 
         # Momentum check
         ok = await _check_momentum(client, pair, new_signal, new_entry)
@@ -941,9 +939,7 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
 
         logger.info(f"   ✅ 3-я (анализ): сигнал {new_signal} @ {new_entry}")
 
-        if CFG.get("wait_candle_start_enabled", True):
-            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-                return None, None
+        # NO_WAIT_STEP_2_3: 3-я ступень — сразу после анализа (догон)
 
         ok = await _check_momentum(client, pair, new_signal, new_entry)
         if not ok:
@@ -1009,9 +1005,7 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
         logger.info(f"   ✅ 4-я (анализ): сигнал {new_signal} @ {new_entry}")
 
-        if CFG.get("wait_candle_start_enabled", True):
-            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
-                return None, None
+        # NO_WAIT_STEP_2_3: 4-я ступень — сразу после анализа (догон)
 
         ok = await _check_momentum(client, pair, new_signal, new_entry)
         if not ok:
