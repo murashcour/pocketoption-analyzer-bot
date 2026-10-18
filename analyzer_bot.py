@@ -1182,6 +1182,8 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         return False
 
     steps = get_martingale_steps(B_start, double_mode=getattr(state, "double_mode_active", False))
+    if state is not None:
+        state.last_steps = steps
     direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
 
     logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
@@ -1339,6 +1341,7 @@ class TraderState:
         self.pair_stats = {}
         self.hour_stats = {}
         self.last_delta = 0.0
+        self.last_steps = []
         # === DOUBLE MARTINGALE ===
         self.double_mode_active = False
         self.double_pnl_start = 0.0
@@ -2100,7 +2103,7 @@ class Trader:
                             logger.info("   ✅ Убыток отыгран! Возврат к базе")
                             self.state.double_mode_active = False
                             self.state.double_pnl_start = 0.0
-                    elif not is_win and len(steps) >= 4 and last_delta < 0:
+                    elif not is_win and len(getattr(self.state, "last_steps", [])) >= 4 and last_delta < 0:
                         logger.info(f"   🔄 Вход в режим удвоения (4-я проиграла, убыток ${last_delta:.2f})")
                         self.state.double_mode_active = True
                         self.state.double_pnl_start = last_delta
