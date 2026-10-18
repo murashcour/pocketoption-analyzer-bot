@@ -1339,6 +1339,9 @@ class TraderState:
         self.pair_stats = {}
         self.hour_stats = {}
         self.last_delta = 0.0
+        # === DOUBLE MARTINGALE ===
+        self.double_mode_active = False
+        self.double_pnl_start = 0.0
 
     def current_pair(self) -> str:
         return self.pairs[self.current_idx]
@@ -2090,17 +2093,17 @@ class Trader:
                 # === DOUBLE MARTINGALE LOGIC ===
                 if CFG.get("double_martingale_enabled", False):
                     last_delta = getattr(self.state, "last_delta", 0.0)
-                    if self.double_mode_active:
-                        self.double_pnl_start += last_delta
-                        logger.info(f"   📉 PnL от начала удвоения: ${self.double_pnl_start:+.2f} (нужно ≥ 0)")
-                        if self.double_pnl_start >= 0:
+                    if self.state.double_mode_active:
+                        self.state.double_pnl_start += last_delta
+                        logger.info(f"   📉 PnL от начала удвоения: ${self.state.double_pnl_start:+.2f} (нужно ≥ 0)")
+                        if self.state.double_pnl_start >= 0:
                             logger.info("   ✅ Убыток отыгран! Возврат к базе")
-                            self.double_mode_active = False
-                            self.double_pnl_start = 0.0
+                            self.state.double_mode_active = False
+                            self.state.double_pnl_start = 0.0
                     elif not is_win and len(steps) >= 4 and last_delta < 0:
                         logger.info(f"   🔄 Вход в режим удвоения (4-я проиграла, убыток ${last_delta:.2f})")
-                        self.double_mode_active = True
-                        self.double_pnl_start = last_delta
+                        self.state.double_mode_active = True
+                        self.state.double_pnl_start = last_delta
 
                 if is_win:
                     self.state.on_win()
