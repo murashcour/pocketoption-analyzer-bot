@@ -47,29 +47,24 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 
 # ==================== КОНФИГ ПО УМОЛЧАНИЮ ====================
 # ==================== DEFAULT CONFIG ====================
+# DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
-    "check_interval_sec": 30,
-    "max_checks": 3,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
-    "fixed_steps": [1.0, 2.0, 4.0],
+    "fixed_steps": [1.0, 2.0, 4.0, 8.0],
     "martingale_steps_count": 4,
-    "pure_martingale": False,   # только для 2-й ступени (3/4 всегда с анализом)
-      # Payout (общие)
+    "pure_martingale": True,
+    "martingale_enabled": True,
     "payout_min": 85,
     "payout_max": 92,
-    # Payout OTC
-    "payout_min_otc": 85,
-    "payout_max_otc": 92,
-    # Payout Real
-    "payout_min_real": 75,
+    "payout_min_otc": 90,
+    "payout_max_otc": 95,
+    "payout_min_real": 85,
     "payout_max_real": 92,
-    "payout_recheck_sec": 1800,
-    # Real-пары
+    "payout_recheck_sec": 600,
     "include_real": True,
     "real_asset_types": ["currency"],
-    # Часовой пояс
     "timezone": "Europe/Moscow",
     "forex_trade_days": [0, 1, 2, 3, 4],
     "min_confirmations": 3,
@@ -78,21 +73,19 @@ DEFAULT_CONFIG = {
     "rsi_bull_min": 53,
     "rsi_bear_max": 47,
     "sr_lookback": 50,
-    "sr_proximity_percent": 0.1,
+    "sr_proximity_percent": 0.05,
     "atr_period": 14,
-    "atr_min_percent": 0.1,
-    "tf_3m_rsi_bull": 55,
-    "tf_3m_rsi_bear": 45,
-    "tf_3m_neutral_blocks": True,
+    "atr_min_percent": 0.008,
+    "tf_3m_rsi_bull": 54,
+    "tf_3m_rsi_bear": 46,
+    "tf_3m_neutral_blocks": False,
     "tf_10m_overbought": 75,
     "tf_10m_oversold": 25,
-    "skip_before_change_plus": 5,
-    "skip_before_change_minus": 3,
-    # Просадка (drawdown)
+    "skip_before_change_plus": 3,
+    "skip_before_change_minus": 2,
     "max_drawdown_percent": 30,
     "drawdown_pause_sec": 1800,
-    "drawdown_max_count": 2,
-     # Новости
+    "drawdown_max_count": 1,
     "news_enabled": True,
     "news_importance_min": 2,
     "news_pre_pause_min": 10,
@@ -100,10 +93,19 @@ DEFAULT_CONFIG = {
     "news_currencies": ["USD", "EUR", "GBP", "JPY"],
     "news_refresh_hours": 4,
     "news_fallback_stop": True,
-    "momentum_timeout_sec": 4,
+    "max_runtime_hours": 24,
+    "max_error_streak": 5,
+    "candle_start_max_sec": 8,
+    "human_delay_sec": 0,
+    "step3_pause_between_circles_sec": 30,
     "wait_candle_start_enabled": True,
+    "check_interval_step4_sec": 45,
     "log_timezone_offset_hours": 3,
+    "pause_after_losses": 4,
+    "pause_after_losses_sec": 1800,
 }
+# /DEFAULT_CONFIG_V2
+
 
 # ==================== ГЛОБАЛЬНЫЕ НАСТРОЙКИ ====================
 # ==================== GLOBAL SETTINGS ====================
