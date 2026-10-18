@@ -48,6 +48,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # ==================== КОНФИГ ПО УМОЛЧАНИЮ ====================
 # ==================== DEFAULT CONFIG ====================
 # FINAL_V1
+# FINAL_V2
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -85,6 +86,7 @@ DEFAULT_CONFIG = {
     "skip_before_change_plus": 3,
     "skip_before_change_minus": 2,
     "max_drawdown_percent": 30,
+    "max_drawdown_percent_double": 50,
     "drawdown_pause_sec": 1800,
     "drawdown_max_count": 1,
     "news_enabled": True,
@@ -969,12 +971,16 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
         if new_signal is None:
             logger.info(f"   ⏸ 2-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
+                _old_pair = pair
                 state.change_pair("2-я нет сигнала")
                 pair = state.current_pair()
                 pairs_tried += 1
-            _pause = CFG.get("no_signal_pause_sec", 60)
-            logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
-            await stopper.sleep(_pause)
+                if pair == _old_pair:
+                    _pause = CFG.get("no_signal_pause_sec", 60)
+                    logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+                    await stopper.sleep(_pause)
+                else:
+                    logger.info(f"   🔄 Пара сменилась ({_old_pair} → {pair}) — проверяю сразу")
             if pairs_tried >= max_pairs:
                 pass_number += 1
                 await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
@@ -1045,12 +1051,16 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
         if new_signal is None:
             logger.info(f"   ⏸ 3-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
+                _old_pair = pair
                 state.change_pair("3-я нет сигнала")
                 pair = state.current_pair()
                 pairs_tried += 1
-            _pause = CFG.get("no_signal_pause_sec", 60)
-            logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
-            await stopper.sleep(_pause)
+                if pair == _old_pair:
+                    _pause = CFG.get("no_signal_pause_sec", 60)
+                    logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+                    await stopper.sleep(_pause)
+                else:
+                    logger.info(f"   🔄 Пара сменилась ({_old_pair} → {pair}) — проверяю сразу")
             if pairs_tried >= max_pairs:
                 pass_number += 1
                 await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
@@ -1089,16 +1099,24 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
 async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
                         with_analysis: bool = False, state=None, entry_price: float = 0):
     """
-    4-я ступень (как 2-я B: с анализом, цикл до открытия).
+    4-я ступень (догон, как 2-я к 1-й).
+    Привязана к 3-й: та же пара, тот же сигнал, если payout OK.
+    Если payout плохой — смена пары + анализ.
     Возвращает (pair, deal) или (None, None).
     """
-    # PURE_STEP2_ONLY: 4-я всегда с анализом
     # PAYOUT_CHANGE_PAIR_SMART: проверка payout
-    pair, _, ok = await _ensure_good_payout(client, pair, "4-я", state, stopper)
+    pair, changed, ok = await _ensure_good_payout(client, pair, "4-я", state, stopper)
     if not ok:
         return pair, None
 
-    logger.info(f"   📈 4-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+    # Если payout OK и пара не менялась — догон (как 2-я)
+    if CFG.get("pure_martingale", False) and not changed:
+        logger.info(f"   📈 4-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
+        deal = await _open_deal_raw(client, pair, 3, signal, steps, stopper, entry_price)
+        return pair, deal
+
+    # Иначе (пара сменилась или pure_martingale=False) — с анализом
+    logger.info(f"   📈 4-я ступень с ПОЛНЫМ АНАЛИЗОМ (пара сменилась → {pair})")
 
     pass_number = 0
     pairs_tried = 0
@@ -1122,12 +1140,16 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
         if new_signal is None:
             logger.info(f"   ⏸ 4-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
+                _old_pair = pair
                 state.change_pair("4-я нет сигнала")
                 pair = state.current_pair()
                 pairs_tried += 1
-            _pause = CFG.get("no_signal_pause_sec", 60)
-            logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
-            await stopper.sleep(_pause)
+                if pair == _old_pair:
+                    _pause = CFG.get("no_signal_pause_sec", 60)
+                    logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+                    await stopper.sleep(_pause)
+                else:
+                    logger.info(f"   🔄 Пара сменилась ({_old_pair} → {pair}) — проверяю сразу")
             if pairs_tried >= max_pairs:
                 pass_number += 1
                 await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
@@ -1136,7 +1158,7 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
         logger.info(f"   ✅ 4-я (анализ): сигнал {new_signal} @ {new_entry}")
 
-        # WAIT_STEP_3_4: ожидание свечи для 4-я ступени
+        # WAIT_STEP_3_4: ожидание свечи для 4-й
         if CFG.get("wait_candle_start_step3_4", True):
             if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
                 return None, None
@@ -1213,6 +1235,8 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     logger.info(f"🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})")
 
     if delta_1 > 0:
+        if state is not None:
+            state.last_delta = delta_1
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})")
         return True
 
@@ -1244,6 +1268,8 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     logger.info(f"🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})")
 
     if delta_2 > 0:
+        if state is not None:
+            state.last_delta = delta_2
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})")
         return True
 
@@ -1278,6 +1304,8 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     logger.info(f"🏁 Итог 1+2+3: ${B_start:.2f} → ${B_after_3:.2f} (Δ {delta_3:+.2f})")
 
     if delta_3 > 0:
+        if state is not None:
+            state.last_delta = delta_3
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_3:+.2f})")
         return True
 
@@ -1978,15 +2006,21 @@ class Trader:
                                 f"${_old_ref:.0f} → ${_new_ref:.0f}"
                             )
 
-                        # === ПРОВЕРКА ПРОСАДКИ ===
+                        # === ПРОВЕРКА ПРОСАДКИ (30% / 50% в удвоении) ===
+                        if getattr(self.state, "double_mode_active", False):
+                            _dd_pct = CFG.get("max_drawdown_percent_double", 50)
+                            _dd_label = "удвоение"
+                        else:
+                            _dd_pct = CFG.get("max_drawdown_percent", 30)
+                            _dd_label = "обычная"
                         threshold = self.reference_balance * (
-                            1 - CFG["max_drawdown_percent"] / 100
+                            1 - _dd_pct / 100
                         )
                         if current_balance < threshold:
                             self.drawdown_count += 1
                             logger.warning(
                                 f"🛑 ПРОСАДКА #{self.drawdown_count} "
-                                f"({CFG['max_drawdown_percent']}%): "
+                                f"({_dd_pct}%, {_dd_label}): "
                                 f"${self.reference_balance:.2f} → ${current_balance:.2f}"
                             )
                             if self.drawdown_count >= CFG["drawdown_max_count"]:
