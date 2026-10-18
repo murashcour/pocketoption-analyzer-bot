@@ -55,7 +55,7 @@ DEFAULT_CONFIG = {
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0, 2.0, 4.0],
     "martingale_steps_count": 4,
-    "pure_martingale": False,
+    "pure_martingale": False,   # только для 2-й ступени (3/4 всегда с анализом)
       # Payout (общие)
     "payout_min": 85,
     "payout_max": 92,
@@ -910,12 +910,7 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
     3-я ступень (как 2-я B: с анализом, цикл до открытия).
     Возвращает (pair, deal) или (None, None).
     """
-    # === PURE_MARTINGALE ===
-    if CFG.get("pure_martingale", False):
-        logger.info(f"   📈 3-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
-        deal = await _open_deal_raw(client, pair, 2, signal, steps, stopper, entry_price)
-        return pair, deal
-
+    # PURE_STEP2_ONLY: 3-я всегда с анализом
     logger.info(f"   📈 3-я ступень с ПОЛНЫМ АНАЛИЗОМ")
 
     pass_number = 0
@@ -982,12 +977,7 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
     4-я ступень (как 2-я B: с анализом, цикл до открытия).
     Возвращает (pair, deal) или (None, None).
     """
-    # === PURE_MARTINGALE ===
-    if CFG.get("pure_martingale", False):
-        logger.info(f"   📈 4-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
-        deal = await _open_deal_raw(client, pair, 3, signal, steps, stopper, entry_price)
-        return pair, deal
-
+    # PURE_STEP2_ONLY: 4-я всегда с анализом
     logger.info(f"   📈 4-я ступень с ПОЛНЫМ АНАЛИЗОМ")
 
     pass_number = 0
