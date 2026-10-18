@@ -2137,7 +2137,7 @@ class Trader:
                             logger.info("   ✅ Убыток отыгран! Возврат к базе")
                             self.state.double_mode_active = False
                             self.state.double_pnl_start = 0.0
-                    elif not is_win and len(getattr(self.state, "last_steps", [])) >= 4 and last_delta < 0:
+                    elif not is_win and last_delta < 0:
                         logger.info(f"   🔄 Вход в режим удвоения (4-я проиграла, убыток ${last_delta:.2f})")
                         self.state.double_mode_active = True
                         self.state.double_pnl_start = last_delta
