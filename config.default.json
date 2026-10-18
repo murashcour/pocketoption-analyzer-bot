@@ -2,7 +2,12 @@
   "expiration": 60,
   "base_percent": 1.0,
   "min_balance_for_percent": 100,
-  "fixed_steps": [1.0, 2.0, 4.0, 8.0],
+  "fixed_steps": [
+    1.0,
+    2.0,
+    4.0,
+    8.0
+  ],
   "payout_min": 85,
   "payout_max": 92,
   "payout_min_otc": 90,
@@ -11,9 +16,17 @@
   "payout_max_real": 92,
   "payout_recheck_sec": 600,
   "include_real": true,
-  "real_asset_types": ["currency"],
+  "real_asset_types": [
+    "currency"
+  ],
   "timezone": "Europe/Moscow",
-  "forex_trade_days": [0, 1, 2, 3, 4],
+  "forex_trade_days": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
   "min_confirmations": 3,
   "rsi_overbought": 75,
   "rsi_oversold": 25,
@@ -37,7 +50,12 @@
   "news_importance_min": 2,
   "news_pre_pause_min": 10,
   "news_post_pause_min": 20,
-  "news_currencies": ["USD", "EUR", "GBP", "JPY"],
+  "news_currencies": [
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY"
+  ],
   "news_refresh_hours": 4,
   "news_fallback_stop": true,
   "max_runtime_hours": 24,
@@ -52,5 +70,59 @@
   "log_timezone_offset_hours": 3,
   "pause_after_losses": 4,
   "pause_after_losses_sec": 1800,
-  "pure_martingale": true
+  "pure_martingale": true,
+  "wait_candle_start_step3_4": true,
+  "no_signal_pause_sec": 60,
+  "double_martingale_enabled": false,
+  "balance_tiers_enabled": false,
+  "balance_tiers": [
+    {
+      "min": 0,
+      "max": 100,
+      "base_type": "fixed_steps",
+      "base_value": null
+    },
+    {
+      "min": 100,
+      "max": 300,
+      "base_type": "usd",
+      "base_value": 1.0
+    },
+    {
+      "min": 300,
+      "max": 600,
+      "base_type": "usd",
+      "base_value": 1.5
+    },
+    {
+      "min": 600,
+      "max": 1000,
+      "base_type": "usd",
+      "base_value": 3.0
+    },
+    {
+      "min": 1000,
+      "max": 2000,
+      "base_type": "usd",
+      "base_value": 5.0
+    },
+    {
+      "min": 2000,
+      "max": 3000,
+      "base_type": "usd",
+      "base_value": 10.0
+    },
+    {
+      "min": 3000,
+      "max": null,
+      "base_type": "percent",
+      "base_value": 0.5
+    }
+  ],
+  "bad_pairs_enabled": false,
+  "bad_pairs_min_series": 10,
+  "bad_pairs_max_winrate": 30.0,
+  "bad_hours_enabled": false,
+  "bad_hours_min_series": 10,
+  "bad_hours_max_winrate": 30.0
 }

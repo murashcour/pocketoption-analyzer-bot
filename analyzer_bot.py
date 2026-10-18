@@ -47,6 +47,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 
 # ==================== КОНФИГ ПО УМОЛЧАНИЮ ====================
 # ==================== DEFAULT CONFIG ====================
+# FINAL_V1
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -99,6 +100,25 @@ DEFAULT_CONFIG = {
     "human_delay_sec": 0,
     "step3_pause_between_circles_sec": 30,
     "wait_candle_start_enabled": True,
+    "wait_candle_start_step3_4": True,
+    "no_signal_pause_sec": 60,
+    "double_martingale_enabled": False,
+    "balance_tiers_enabled": False,
+    "balance_tiers": [
+        {"min": 0, "max": 100, "base_type": "fixed_steps", "base_value": None},
+        {"min": 100, "max": 300, "base_type": "usd", "base_value": 1.0},
+        {"min": 300, "max": 600, "base_type": "usd", "base_value": 1.5},
+        {"min": 600, "max": 1000, "base_type": "usd", "base_value": 3.0},
+        {"min": 1000, "max": 2000, "base_type": "usd", "base_value": 5.0},
+        {"min": 2000, "max": 3000, "base_type": "usd", "base_value": 10.0},
+        {"min": 3000, "max": None, "base_type": "percent", "base_value": 0.5}
+    ],
+    "bad_pairs_enabled": False,
+    "bad_pairs_min_series": 10,
+    "bad_pairs_max_winrate": 30.0,
+    "bad_hours_enabled": False,
+    "bad_hours_min_series": 10,
+    "bad_hours_max_winrate": 30.0,
     "check_interval_step4_sec": 45,
     "log_timezone_offset_hours": 3,
     "pause_after_losses": 4,
@@ -572,18 +592,45 @@ async def check_payout(client, asset: str) -> Optional[float]:
 # ==================== END OF PART 2 ====================
 # ==================== РАСЧЁТ СТУПЕНЕЙ ====================
 # ==================== MARTINGALE STEPS ====================
-def get_martingale_steps(balance: float) -> List[float]:
+def get_martingale_steps(balance: float, double_mode: bool = False) -> List[float]:
     """
     Ступени мартингейла.
-    Количество — из CFG["martingale_steps_count"] (1, 2, 3 или 4).
+    Учитывает balance_tiers (если включено) и double_mode (удвоение базы).
     """
     count = max(1, min(int(CFG.get("martingale_steps_count", 2)), 4))
 
-    if balance < CFG["min_balance_for_percent"]:
-        return list(CFG["fixed_steps"])[:count]
+    base_steps = []
+    # === BALANCE TIERS ===
+    if CFG.get("balance_tiers_enabled", False):
+        tiers = CFG.get("balance_tiers", [])
+        for tier in tiers:
+            t_min = tier.get("min", 0)
+            t_max = tier.get("max")
+            if balance >= t_min and (t_max is None or balance < t_max):
+                if tier["base_type"] == "fixed_steps":
+                    base_steps = list(CFG["fixed_steps"])[:count]
+                elif tier["base_type"] == "usd":
+                    base = tier["base_value"]
+                    base_steps = [round(base * (2 ** i), 2) for i in range(count)]
+                elif tier["base_type"] == "percent":
+                    base = round(balance * tier["base_value"] / 100, 2)
+                    base_steps = [round(base * (2 ** i), 2) for i in range(count)]
+                if t_min >= 1000:
+                    logger.warning(f"⚠️ Баланс ≥ $1000. Базовая ставка: ${base_steps[0]:.2f}. Проверьте настройки!")
+                break
+    # === FALLBACK (старая логика) ===
+    if not base_steps:
+        if balance < CFG["min_balance_for_percent"]:
+            base_steps = list(CFG["fixed_steps"])[:count]
+        else:
+            base = round(balance * CFG["base_percent"] / 100, 2)
+            base_steps = [round(base * (2 ** i), 2) for i in range(count)]
 
-    base = round(balance * CFG["base_percent"] / 100, 2)
-    return [round(base * (2 ** i), 2) for i in range(count)]
+    # === DOUBLE MODE ===
+    if double_mode and CFG.get("double_martingale_enabled", False):
+        base_steps = [round(s * 2, 2) for s in base_steps]
+
+    return base_steps
 
 
 # ==================== STOP CHECKER ====================
@@ -770,7 +817,9 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                     state.change_pair("1-я: сигнал пропал")
                     pair = state.current_pair()
                     pairs_tried += 1
-                await stopper.sleep(2)
+                _pause = CFG.get("no_signal_pause_sec", 60)
+                logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+                await stopper.sleep(_pause)
                 continue
             if new_sig != signal:
                 logger.info(f"   ⚠ 1-я: сигнал изменился ({signal} → {new_sig}) — открываю новый")
@@ -923,7 +972,9 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
                 state.change_pair("2-я нет сигнала")
                 pair = state.current_pair()
                 pairs_tried += 1
-            await stopper.sleep(2)
+            _pause = CFG.get("no_signal_pause_sec", 60)
+            logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+            await stopper.sleep(_pause)
             if pairs_tried >= max_pairs:
                 pass_number += 1
                 await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
@@ -997,7 +1048,9 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
                 state.change_pair("3-я нет сигнала")
                 pair = state.current_pair()
                 pairs_tried += 1
-            await stopper.sleep(2)
+            _pause = CFG.get("no_signal_pause_sec", 60)
+            logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+            await stopper.sleep(_pause)
             if pairs_tried >= max_pairs:
                 pass_number += 1
                 await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
@@ -1006,7 +1059,10 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
 
         logger.info(f"   ✅ 3-я (анализ): сигнал {new_signal} @ {new_entry}")
 
-        # NO_WAIT_STEP_2_3: 3-я ступень — сразу после анализа (догон)
+        # WAIT_STEP_3_4: ожидание свечи для 3-я ступени
+        if CFG.get("wait_candle_start_step3_4", True):
+            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                return None, None
 
         ok = await _check_momentum(client, pair, new_signal, new_entry)
         if not ok:
@@ -1069,7 +1125,9 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
                 state.change_pair("4-я нет сигнала")
                 pair = state.current_pair()
                 pairs_tried += 1
-            await stopper.sleep(2)
+            _pause = CFG.get("no_signal_pause_sec", 60)
+            logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+            await stopper.sleep(_pause)
             if pairs_tried >= max_pairs:
                 pass_number += 1
                 await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
@@ -1078,7 +1136,10 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
         logger.info(f"   ✅ 4-я (анализ): сигнал {new_signal} @ {new_entry}")
 
-        # NO_WAIT_STEP_2_3: 4-я ступень — сразу после анализа (догон)
+        # WAIT_STEP_3_4: ожидание свечи для 4-я ступени
+        if CFG.get("wait_candle_start_step3_4", True):
+            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                return None, None
 
         ok = await _check_momentum(client, pair, new_signal, new_entry)
         if not ok:
@@ -1120,7 +1181,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.error(f"Не удалось получить баланс: {e}")
         return False
 
-    steps = get_martingale_steps(B_start)
+    steps = get_martingale_steps(B_start, double_mode=getattr(state, "double_mode_active", False))
     direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
 
     logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
@@ -1243,6 +1304,9 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     delta_final = B_final - B_start
     logger.info(f"🏁 СЕРИЯ закрыта (4 ступени): ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
 
+    if state is not None:
+        state.last_delta = delta_final
+
     if delta_final > 0:
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})")
         return True
@@ -1271,6 +1335,10 @@ class TraderState:
 
         self.last_series_won: Optional[bool] = None
         self.skip_limit: int = CFG["skip_before_change_minus"]
+        # === BAD PAIRS / HOURS ===
+        self.pair_stats = {}
+        self.hour_stats = {}
+        self.last_delta = 0.0
 
     def current_pair(self) -> str:
         return self.pairs[self.current_idx]
@@ -1304,7 +1372,22 @@ class TraderState:
             logger.info(f"📋 Список пар обновлён ({old_count} → {len(new_pairs)}), "
                         f"переход на {self.current_pair()}")
 
+    def _record_stats(self, is_win: bool):
+        pair = self.current_pair()
+        hour = datetime.now().hour
+        if pair not in self.pair_stats:
+            self.pair_stats[pair] = {"wins": 0, "losses": 0}
+        if hour not in self.hour_stats:
+            self.hour_stats[hour] = {"wins": 0, "losses": 0}
+        if is_win:
+            self.pair_stats[pair]["wins"] += 1
+            self.hour_stats[hour]["wins"] += 1
+        else:
+            self.pair_stats[pair]["losses"] += 1
+            self.hour_stats[hour]["losses"] += 1
+
     def on_win(self):
+        self._record_stats(True)
         self.skip_streak = 0
         self.total_wins += 1
         self.total_series += 1
@@ -1313,6 +1396,7 @@ class TraderState:
         logger.info(f"✅ Плюс — лимит пропусков: {self.skip_limit}")
 
     def on_loss(self):
+        self._record_stats(False)
         self.skip_streak = 0
         self.total_losses += 1
         self.total_series += 1
@@ -1331,13 +1415,30 @@ class TraderState:
 
     def summary(self) -> str:
         wr = (self.total_wins / self.total_series * 100) if self.total_series else 0.0
-        return (
-            f"📊 ИТОГИ:\n"
-            f"   Серий: {self.total_series} (✅ {self.total_wins} / ❌ {self.total_losses})\n"
-            f"   Winrate: {wr:.1f}%\n"
-            f"   Пропусков: {self.total_skips}\n"
-            f"   Смен пар: {self.total_pair_changes}"
-        )
+        lines = [
+            f"📊 ИТОГИ:",
+            f"   Серий: {self.total_series} (✅ {self.total_wins} / ❌ {self.total_losses})",
+            f"   Winrate: {wr:.1f}%",
+            f"   Пропусков: {self.total_skips}",
+            f"   Смен пар: {self.total_pair_changes}",
+        ]
+        if self.pair_stats and CFG.get("bad_pairs_enabled", False):
+            lines.append("   📉 Худшие пары:")
+            sorted_pairs = sorted(self.pair_stats.items(), key=lambda x: (x[1]["wins"] / max(1, x[1]["wins"] + x[1]["losses"])))
+            for p, st in sorted_pairs[:5]:
+                total = st["wins"] + st["losses"]
+                if total >= CFG.get("bad_pairs_min_series", 10):
+                    pwr = st["wins"] / total * 100
+                    lines.append(f"      {p}: {pwr:.1f}% ({st['wins']}/{total})")
+        if self.hour_stats and CFG.get("bad_hours_enabled", False):
+            lines.append("   📉 Худшие часы:")
+            sorted_hours = sorted(self.hour_stats.items(), key=lambda x: (x[1]["wins"] / max(1, x[1]["wins"] + x[1]["losses"])))
+            for h, st in sorted_hours[:5]:
+                total = st["wins"] + st["losses"]
+                if total >= CFG.get("bad_hours_min_series", 10):
+                    hwr = st["wins"] / total * 100
+                    lines.append(f"      {h:02d}:00: {hwr:.1f}% ({st['wins']}/{total})")
+        return "\n".join(lines)
 
 
 # ==================== ЗАГРУЗКА ПАР ====================
@@ -1759,6 +1860,9 @@ class Trader:
         self.consecutive_losses = 0
         self.max_consecutive_losses = CFG.get("pause_after_losses", 4)
         self.pause_after_losses_sec = CFG.get("pause_after_losses_sec", 1800)
+        # === DOUBLE MARTINGALE ===
+        self.double_mode_active = False
+        self.double_pnl_start = 0.0
 
     async def run(self):
         """Внешний цикл реконнекта при потере соединения."""
@@ -1982,6 +2086,21 @@ class Trader:
                 is_win = await run_martingale_series(
                     client, pair, signal, self.stopper, self.state, entry_price
                 )
+
+                # === DOUBLE MARTINGALE LOGIC ===
+                if CFG.get("double_martingale_enabled", False):
+                    last_delta = getattr(self.state, "last_delta", 0.0)
+                    if self.double_mode_active:
+                        self.double_pnl_start += last_delta
+                        logger.info(f"   📉 PnL от начала удвоения: ${self.double_pnl_start:+.2f} (нужно ≥ 0)")
+                        if self.double_pnl_start >= 0:
+                            logger.info("   ✅ Убыток отыгран! Возврат к базе")
+                            self.double_mode_active = False
+                            self.double_pnl_start = 0.0
+                    elif not is_win and len(steps) >= 4 and last_delta < 0:
+                        logger.info(f"   🔄 Вход в режим удвоения (4-я проиграла, убыток ${last_delta:.2f})")
+                        self.double_mode_active = True
+                        self.double_pnl_start = last_delta
 
                 if is_win:
                     self.state.on_win()

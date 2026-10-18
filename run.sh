@@ -3,7 +3,8 @@
 cd "$(dirname "$0")"
 
 # Проверка, не запущен ли уже бот
-if screen -ls 2>/dev/null | grep -q "\.bot"; then
+screen -wipe 2>/dev/null || true
+if screen -ls 2>/dev/null | grep -v "Dead" | grep -qE "\.bot[[:space:]]"; then
     echo "⚠️ Сессия screen 'bot' уже существует."
     echo "   Останови: screen -r bot (Ctrl+C), затем: screen -X -S bot quit"
     exit 1
