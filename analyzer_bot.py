@@ -819,6 +819,50 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
         return pair, deal, entry_price
 
 
+
+
+async def _ensure_good_payout(client, pair: str, step_name: str, state, stopper):
+    """
+    PAYOUT_CHANGE_PAIR_SMART: проверяет payout.
+    Если плохой — меняет пару, пока не найдёт с хорошим.
+    Возвращает (pair, changed, ok):
+      pair — пара (возможно, новая)
+      changed — True, если пара сменилась
+      ok — False, если не нашли пару (остановка)
+    """
+    max_attempts = len(state.pairs) if state else 20
+    attempts = 0
+    original_pair = pair
+    changed = False
+
+    while True:
+        if stopper.requested():
+            return pair, changed, False
+
+        live_payout = await check_payout(client, pair)
+        pmin, pmax = get_payout_range(pair)
+
+        if live_payout is not None and pmin <= live_payout <= pmax:
+            logger.info(f"   💹 {step_name}: payout {live_payout:.1f}% — OK на {pair}")
+            return pair, changed, True
+
+        # Payout плохой — смена пары
+        logger.warning(
+            f"   ⚠ {step_name}: payout {live_payout}% вне [{pmin}, {pmax}]% "
+            f"на {pair} — меняю пару"
+        )
+        if state is not None:
+            state.change_pair(f"{step_name}: payout вне диапазона")
+            pair = state.current_pair()
+            changed = True
+
+        attempts += 1
+        if attempts >= max_attempts:
+            logger.warning(f"   ⚠ {step_name}: не нашли пару с payout за {max_attempts} попыток")
+            return pair, changed, False
+
+        await stopper.sleep(1)
+
 async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
                         with_analysis: bool = False, state=None, entry_price: float = 0):
     """
@@ -833,14 +877,22 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
         deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price)
         return pair, deal
 
-    # === PURE_MARTINGALE ===
-    if CFG.get("pure_martingale", False):
+    # === PAYOUT_CHANGE_PAIR_SMART ===
+    pair, changed, ok = await _ensure_good_payout(client, pair, "2-я", state, stopper)
+    if not ok:
+        return pair, None
+
+    # Если payout OK и пара не менялась — догон (pure_martingale)
+    if CFG.get("pure_martingale", False) and not changed:
         logger.info(f"   📈 2-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
         deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price)
         return pair, deal
 
-    # === Вариант B: С АНАЛИЗОМ + цикл ===
-    logger.info(f"   📈 2-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+    # Иначе (пара сменилась или pure_martingale=False) — с анализом
+    if changed:
+        logger.info(f"   📈 2-я ступень с ПОЛНЫМ АНАЛИЗОМ (пара сменилась → {pair})")
+    else:
+        logger.info(f"   📈 2-я ступень с ПОЛНЫМ АНАЛИЗОМ")
 
     pass_number = 0
     pairs_tried = 0
@@ -911,6 +963,11 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
     Возвращает (pair, deal) или (None, None).
     """
     # PURE_STEP2_ONLY: 3-я всегда с анализом
+    # PAYOUT_CHANGE_PAIR_SMART: проверка payout
+    pair, _, ok = await _ensure_good_payout(client, pair, "3-я", state, stopper)
+    if not ok:
+        return pair, None
+
     logger.info(f"   📈 3-я ступень с ПОЛНЫМ АНАЛИЗОМ")
 
     pass_number = 0
@@ -978,6 +1035,11 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
     Возвращает (pair, deal) или (None, None).
     """
     # PURE_STEP2_ONLY: 4-я всегда с анализом
+    # PAYOUT_CHANGE_PAIR_SMART: проверка payout
+    pair, _, ok = await _ensure_good_payout(client, pair, "4-я", state, stopper)
+    if not ok:
+        return pair, None
+
     logger.info(f"   📈 4-я ступень с ПОЛНЫМ АНАЛИЗОМ")
 
     pass_number = 0
