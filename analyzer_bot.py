@@ -55,7 +55,7 @@ DEFAULT_CONFIG = {
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0, 2.0, 4.0, 8.0],
-    "martingale_steps_count": 4,
+    "martingale_steps_count": 3,
     "pure_martingale": True,
     "martingale_enabled": True,
     "payout_min": 85,

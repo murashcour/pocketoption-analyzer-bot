@@ -64,7 +64,7 @@
   "human_delay_sec": 0,
   "step3_pause_between_circles_sec": 30,
   "wait_candle_start_enabled": true,
-  "martingale_steps_count": 4,
+  "martingale_steps_count": 3,
   "martingale_enabled": true,
   "check_interval_step4_sec": 45,
   "log_timezone_offset_hours": 3,
