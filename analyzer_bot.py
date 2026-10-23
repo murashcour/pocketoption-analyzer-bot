@@ -52,6 +52,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # MANUAL_V2
 # MANUAL_V3
 # MANUAL_V4
+# FINAL_V5
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1756,6 +1757,12 @@ async def run_manual_mode(client, state, stopper, mode):
     logger.info(f"🎮 РУЧНОЙ РЕЖИМ: {mode}")
     logger.info("   Команды: Enter=продолжить, s=сменить пару, q=выход")
 
+    # FINAL_V5: счётчики
+    manual_wins = 0
+    manual_losses = 0
+    manual_skips = 0
+    manual_total = 0
+
     last_payout_check = time.time()
 
     while True:
@@ -1788,7 +1795,7 @@ async def run_manual_mode(client, state, stopper, mode):
         now = datetime.now().strftime('%H:%M:%S')
 
         if signal:
-            # MANUAL_V3: цветной сигнал + пауза
+            # FINAL_V5: цветной сигнал
             if signal == "CALL":
                 print(f"\033[94m\n🎯 [{now}] СИГНАЛ: CALL на {pair} @ {entry_price}\033[0m")
                 print(f"\033[94m   👉 ВВЕРХ (CALL) — переключитесь на {pair}\033[0m")
@@ -1796,11 +1803,35 @@ async def run_manual_mode(client, state, stopper, mode):
                 print(f"\033[91m\n🎯 [{now}] СИГНАЛ: PUT на {pair} @ {entry_price}\033[0m")
                 print(f"\033[91m   👉 ВНИЗ (PUT) — переключитесь на {pair}\033[0m")
             logger.info(f"🎯 [{now}] СИГНАЛ: {signal} на {pair} @ {entry_price}")
-            _pause_sig = CFG.get("manual_signal_pause_sec", 120)
+            _pause_sig = CFG.get("manual_signal_pause_sec", 60)
             logger.info(f"   ⏸ Пауза {_pause_sig}с после сигнала (manual_signal_pause_sec)")
             await stopper.sleep(_pause_sig)
 
-            # MANUAL_V2: в show-only — не ждём Enter, сразу дальше
+            # FINAL_V5: счётчик (+ / - / 0)
+            ans_res = await asyncio.to_thread(
+                input, "   Результат? [+ = win / - = loss / 0 = skip / Enter = пропустить]: "
+            )
+            ans_res = ans_res.strip()
+            if ans_res == "+":
+                manual_wins += 1
+                manual_total += 1
+                print(f"\033[92m   ✅ WIN (всего: {manual_total})\033[0m")
+            elif ans_res == "-":
+                manual_losses += 1
+                manual_total += 1
+                print(f"\033[91m   ❌ LOSS (всего: {manual_total})\033[0m")
+            elif ans_res == "0":
+                manual_skips += 1
+                print(f"   ⏸ SKIP (пропущено: {manual_skips})")
+            else:
+                print(f"   ⏭ Пропущено (без учёта)")
+            # Показать статистику
+            if manual_total > 0:
+                wr = manual_wins / manual_total * 100
+                print(f"\n📊 [Статистика] ✅ {manual_wins} / ❌ {manual_losses} / ⏸ {manual_skips} "
+                      f"| Всего: {manual_total} | Winrate: {wr:.1f}%\n")
+
+            # FINAL_V5: в show-only — не ждём Enter, сразу дальше
             if mode == "show-only":
                 logger.info("   [show-only] Автоматически дальше...")
                 state.change_pair("ручной: show-only дальше")
