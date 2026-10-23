@@ -51,6 +51,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FINAL_V2
 # MANUAL_V2
 # MANUAL_V3
+# MANUAL_V4
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -79,7 +80,7 @@ DEFAULT_CONFIG = {
     "sr_lookback": 50,
     "sr_proximity_percent": 0.05,
     "atr_period": 14,
-    "atr_min_percent": 0.008,
+    "atr_min_percent": 0.015,
     "tf_3m_rsi_bull": 54,
     "tf_3m_rsi_bear": 46,
     "tf_3m_neutral_blocks": False,
@@ -106,7 +107,7 @@ DEFAULT_CONFIG = {
     "wait_candle_start_enabled": True,
     "wait_candle_start_step3_4": True,
     "no_signal_pause_sec": 60,
-    "manual_signal_pause_sec": 120,
+    "manual_signal_pause_sec": 60,
     "double_martingale_enabled": False,
     "balance_tiers_enabled": False,
     "balance_tiers": [
@@ -318,6 +319,38 @@ async def get_current_price(client, pair: str) -> Optional[float]:
 # ==================== END OF PART 1 ====================
 # ==================== АНАЛИЗ 1м ====================
 # ==================== 1m ANALYSIS ====================
+def adx(candles: List, period: int = 14) -> Optional[float]:
+    """ADX — сила тренда (0-100). MANUAL_V4."""
+    if len(candles) < period * 2:
+        return None
+    trs = []
+    plus_dm = []
+    minus_dm = []
+    for i in range(1, len(candles)):
+        h = get_high(candles[i])
+        l = get_low(candles[i])
+        prev_h = get_high(candles[i - 1])
+        prev_l = get_low(candles[i - 1])
+        prev_c = get_close(candles[i - 1])
+        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        trs.append(tr)
+        up = h - prev_h
+        down = prev_l - l
+        plus_dm.append(up if up > down and up > 0 else 0)
+        minus_dm.append(down if down > up and down > 0 else 0)
+    
+    atr_val = sum(trs[-period:]) / period
+    if atr_val == 0:
+        return 0.0
+    plus_di = sum(plus_dm[-period:]) / period / atr_val * 100
+    minus_di = sum(minus_dm[-period:]) / period / atr_val * 100
+    di_sum = plus_di + minus_di
+    if di_sum == 0:
+        return 0.0
+    dx = abs(plus_di - minus_di) / di_sum * 100
+    return dx
+
+
 def analyze_1m(candles: List) -> Optional[str]:
     """Полный анализ 1-минутного ТФ. Возвращает CALL/PUT/None."""
     if len(candles) < 50:
@@ -356,16 +389,7 @@ def analyze_1m(candles: List) -> Optional[str]:
     else:
         bear += 1
 
-    last = candles[-1]
-    o = get_open(last); h = get_high(last); l = get_low(last); cl = get_close(last)
-    body = abs(cl - o)
-    upper = h - max(cl, o)
-    lower = min(cl, o) - l
-    if body > 0:
-        if lower > body * 2 and upper < body * 0.5:
-            bull += 1
-        if upper > body * 2 and lower < body * 0.5:
-            bear += 1
+    # MANUAL_V4: свечные паттерны убраны (Marshall, 2006 — нет преимущества)
 
     total = bull + bear
     mc = CFG["min_confirmations"]
@@ -506,21 +530,32 @@ async def full_analysis(client, pair: str):
         logger.info(f"   [{pair}] S/R блокирует сделку")
         return None, None, "SR"
 
-    # 3м
+    # MANUAL_V4: ADX (5м) — фильтр флэта
     if c5 and len(c5) >= 30:
-        sig_3m = analyze_3m(c5)
-        if sig_3m is None:
-            if CFG["tf_3m_neutral_blocks"]:
-                logger.info(f"   [5м] нейтрально — блокирую")
-                return None, None, "CONFLICT_5M"
-            logger.info(f"   [5м] нейтрально — пропускаю")
-        elif sig_3m != sig_1m:
-            logger.info(f"   [5м] {sig_3m} — конфликт с 1м ({sig_1m})")
-            return None, None, "CONFLICT_5M"
-        else:
-            logger.info(f"   [5м] {sig_3m} — совпадает с 1м ✓")
-    else:
-        logger.info(f"   [{pair}] 5м мало данных")
+        adx_val = adx(c5, 14)
+        if adx_val is not None:
+            logger.info(f"   [ADX 5м] {adx_val:.1f}")
+            if adx_val < 20:
+                logger.info(f"   [ADX 5м] флэт (< 20) — пропуск")
+                return None, None, "ADX_FLAT"
+            elif adx_val > 25:
+                logger.info(f"   [ADX 5м] тренд (> 25) — OK")
+            else:
+                logger.info(f"   [ADX 5м] нейтрально (20-25) — OK")
+
+    # MANUAL_V4: 5м RSI фильтр убран (оставлен 15м)
+
+    # MANUAL_V4: 15м тренд (EMA20 vs EMA50)
+    if c15 and len(c15) >= 30:
+        closes_15 = [get_close(c) for c in c15]
+        e20_15 = ema(closes_15, 20)
+        e50_15 = ema(closes_15, 50)
+        if e20_15 is not None and e50_15 is not None:
+            trend_15 = "CALL" if e20_15 > e50_15 else "PUT"
+            logger.info(f"   [15м тренд] {trend_15} (EMA20 vs EMA50)")
+            if trend_15 != sig_1m:
+                logger.info(f"   [15м тренд] конфликт с 1м ({sig_1m}) — пропуск")
+                return None, None, "CONFLICT_15M_TREND"
 
     # 15м — как 5м + extreme RSI
     if c15 and len(c15) >= 30:
