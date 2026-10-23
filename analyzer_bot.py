@@ -49,6 +49,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # ==================== DEFAULT CONFIG ====================
 # FINAL_V1
 # FINAL_V2
+# MANUAL_V2
+# MANUAL_V3
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -101,9 +103,10 @@ DEFAULT_CONFIG = {
     "candle_start_max_sec": 8,
     "human_delay_sec": 0,
     "step3_pause_between_circles_sec": 30,
-    "wait_candle_start_enabled": False,
-    "wait_candle_start_step3_4": False,
+    "wait_candle_start_enabled": True,
+    "wait_candle_start_step3_4": True,
     "no_signal_pause_sec": 60,
+    "manual_signal_pause_sec": 120,
     "double_martingale_enabled": False,
     "balance_tiers_enabled": False,
     "balance_tiers": [
@@ -1718,9 +1721,19 @@ async def run_manual_mode(client, state, stopper, mode):
     logger.info(f"🎮 РУЧНОЙ РЕЖИМ: {mode}")
     logger.info("   Команды: Enter=продолжить, s=сменить пару, q=выход")
 
+    last_payout_check = time.time()
+
     while True:
         if stopper.requested():
             return
+
+        # Перепроверка payout каждые payout_recheck_sec
+        if time.time() - last_payout_check >= CFG.get("payout_recheck_sec", 600):
+            logger.info("🔄 Перепроверка payout всех пар...")
+            new_pairs = await load_currency_pairs(client)
+            if new_pairs:
+                state.update_pairs(new_pairs)
+            last_payout_check = time.time()
 
         pair = state.current_pair()
         logger.info(f"\n🎯 Проверяю {pair}...")
@@ -1740,10 +1753,24 @@ async def run_manual_mode(client, state, stopper, mode):
         now = datetime.now().strftime('%H:%M:%S')
 
         if signal:
-            logger.info(f"\n🎯 [{now}] СИГНАЛ: {signal} на {pair} @ {entry_price}")
-            logger.info(f"   👉 Переключитесь на {pair} в PocketOption")
+            # MANUAL_V3: цветной сигнал + пауза
+            if signal == "CALL":
+                print(f"\033[94m\n🎯 [{now}] СИГНАЛ: CALL на {pair} @ {entry_price}\033[0m")
+                print(f"\033[94m   👉 ВВЕРХ (CALL) — переключитесь на {pair}\033[0m")
+            else:
+                print(f"\033[91m\n🎯 [{now}] СИГНАЛ: PUT на {pair} @ {entry_price}\033[0m")
+                print(f"\033[91m   👉 ВНИЗ (PUT) — переключитесь на {pair}\033[0m")
+            logger.info(f"🎯 [{now}] СИГНАЛ: {signal} на {pair} @ {entry_price}")
+            _pause_sig = CFG.get("manual_signal_pause_sec", 120)
+            logger.info(f"   ⏸ Пауза {_pause_sig}с после сигнала (manual_signal_pause_sec)")
+            await stopper.sleep(_pause_sig)
 
-            # Пауза до Enter
+            # MANUAL_V2: в show-only — не ждём Enter, сразу дальше
+            if mode == "show-only":
+                logger.info("   [show-only] Автоматически дальше...")
+                state.change_pair("ручной: show-only дальше")
+                continue
+            # В confirm — ждём Enter
             ans = await asyncio.to_thread(
                 input, "   Нажмите Enter, когда готовы [q=выход]: "
             )
@@ -1801,18 +1828,9 @@ async def run_manual_mode(client, state, stopper, mode):
 
         else:
             logger.info(f"⏸ [{now}] Пропуск на {pair}")
-
-        # Спросить: продолжить?
-        ans = await asyncio.to_thread(
-            input, "   Продолжить? [Enter=та же пара / s=сменить / q=выход]: "
-        )
-        ans = ans.strip().lower()
-
-        if ans == "q":
-            logger.info("⏹ Выход из ручного режима")
-            return
-        elif ans == "s":
-            state.change_pair("ручной: смена пары")
+            # MANUAL_V2: сразу следующая пара (без вопроса)
+            state.change_pair("ручной: пропуск")
+            continue
 
 
 def get_reference_step(balance: float) -> float:
@@ -2137,7 +2155,7 @@ class Trader:
                             logger.info("   ✅ Убыток отыгран! Возврат к базе")
                             self.state.double_mode_active = False
                             self.state.double_pnl_start = 0.0
-                    elif not is_win and last_delta < 0:
+                    elif not is_win and len(getattr(self.state, "last_steps", [])) >= 4 and last_delta < 0:
                         logger.info(f"   🔄 Вход в режим удвоения (4-я проиграла, убыток ${last_delta:.2f})")
                         self.state.double_mode_active = True
                         self.state.double_pnl_start = last_delta
