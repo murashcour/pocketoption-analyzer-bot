@@ -59,6 +59,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # PAUSE_20
 # LIVE_CANDLES_FIX
 # CHECKLIST_ALL
+# COLORS_FINAL
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -776,7 +777,14 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
             "payout": live_payout, # Сохраняем payout для истории
         }
         dir_str = "ВВЕРХ ⬆️ (CALL)" if sig == "CALL" else "ВНИЗ ⬇️ (PUT)"
+        # COLORS_FINAL: цвет открытия
+        if sig == "CALL":
+            d_color = "\033[94m"
+        else:
+            d_color = "\033[91m"
+        d_reset = "\033[0m"
         logger.info(f"📈 [{step_idx+1}/{len(steps)}] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек, payout {live_payout}%)")
+        print(f"{d_color}📈 [{step_idx+1}/{len(steps)}] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек, payout {live_payout}%){d_reset}")
         return deal
     except (PocketOptionError, ConnectionError, OSError) as e:
         logger.error(f"❌ СЕТЕВАЯ ошибка открытия ${steps[step_idx]:.2f}: {e}")
@@ -1303,7 +1311,11 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         if state is not None:
             state.last_delta = delta_1
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})")
+        print(f"\033[92m🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})\033[0m")
+        print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})\033[0m")
         return True
+    else:
+        print(f"\033[91m🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})\033[0m")
 
     # Реально минус → 2-я С АНАЛИЗОМ
     if len(steps) < 2:
@@ -1336,7 +1348,11 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         if state is not None:
             state.last_delta = delta_2
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})")
+        print(f"\033[92m🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})\033[0m")
+        print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})\033[0m")
         return True
+    else:
+        print(f"\033[91m🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})\033[0m")
 
     # ===== ПРОВЕРКА: есть ли 3-я ступень в steps? =====
     if len(steps) < 3:
@@ -1372,7 +1388,11 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         if state is not None:
             state.last_delta = delta_3
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_3:+.2f})")
+        print(f"\033[92m🏁 Итог 1+2+3: ${B_start:.2f} → ${B_after_3:.2f} (Δ {delta_3:+.2f})\033[0m")
+        print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_3:+.2f})\033[0m")
         return True
+    else:
+        print(f"\033[91m🏁 Итог 1+2+3: ${B_start:.2f} → ${B_after_3:.2f} (Δ {delta_3:+.2f})\033[0m")
 
     # ===== ШАГ 5: 4-я ступень (если есть в config) =====
     if len(steps) < 4:
@@ -1397,16 +1417,20 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         return False
 
     delta_final = B_final - B_start
-    logger.info(f"🏁 СЕРИЯ закрыта (4 ступени): ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
+    logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
 
     if state is not None:
         state.last_delta = delta_final
 
     if delta_final > 0:
         logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})")
+        print(f"\033[92m🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})\033[0m")
+        print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})\033[0m")
         return True
     else:
         logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_final:+.2f})")
+        print(f"\033[91m🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})\033[0m")
+        print(f"\033[91m❌ СЕРИЯ МИНУС (Δ {delta_final:+.2f})\033[0m")
         return False
 
 
