@@ -53,6 +53,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # MANUAL_V3
 # MANUAL_V4
 # FINAL_V5
+# FIX_SHOWONLY
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1807,7 +1808,13 @@ async def run_manual_mode(client, state, stopper, mode):
             logger.info(f"   ⏸ Пауза {_pause_sig}с после сигнала (manual_signal_pause_sec)")
             await stopper.sleep(_pause_sig)
 
-            # FINAL_V5: счётчик (+ / - / 0)
+            # FIX_SHOWONLY: в show-only — сразу дальше (без input)
+            if mode == "show-only":
+                logger.info("   [show-only] Автоматически дальше...")
+                state.change_pair("ручной: show-only дальше")
+                continue
+
+            # FINAL_V5: счётчик (+ / - / 0) — только для --confirm
             ans_res = await asyncio.to_thread(
                 input, "   Результат? [+ = win / - = loss / 0 = skip / Enter = пропустить]: "
             )
@@ -1830,12 +1837,6 @@ async def run_manual_mode(client, state, stopper, mode):
                 wr = manual_wins / manual_total * 100
                 print(f"\n📊 [Статистика] ✅ {manual_wins} / ❌ {manual_losses} / ⏸ {manual_skips} "
                       f"| Всего: {manual_total} | Winrate: {wr:.1f}%\n")
-
-            # FINAL_V5: в show-only — не ждём Enter, сразу дальше
-            if mode == "show-only":
-                logger.info("   [show-only] Автоматически дальше...")
-                state.change_pair("ручной: show-only дальше")
-                continue
             # В confirm — ждём Enter
             ans = await asyncio.to_thread(
                 input, "   Нажмите Enter, когда готовы [q=выход]: "
