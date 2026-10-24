@@ -56,6 +56,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FIX_SHOWONLY
 # TREND_5M
 # AUTO_2STEPS
+# PAUSE_20
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -111,7 +112,7 @@ DEFAULT_CONFIG = {
     "wait_candle_start_enabled": True,
     "wait_candle_start_step3_4": True,
     "no_signal_pause_sec": 60,
-    "manual_signal_pause_sec": 60,
+    "manual_signal_pause_sec": 20,
     "double_martingale_enabled": False,
     "balance_tiers_enabled": False,
     "balance_tiers": [
