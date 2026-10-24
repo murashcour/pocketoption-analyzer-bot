@@ -61,6 +61,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CHECKLIST_ALL
 # COLORS_FINAL
 # AUTO_HISTORY
+# HISTORY_OUTPUT
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -2096,16 +2097,27 @@ class Trader:
         
         # 1. Запускаем collect_history.py
         try:
+            # HISTORY_OUTPUT: Выводим stdout в реальном времени
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "collect_history.py",
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.STDOUT
             )
-            stdout, stderr = await proc.communicate()
+            
+            # Читаем вывод построчно и логируем
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                text = line.decode('utf-8', errors='replace').strip()
+                if text:
+                    logger.info(f"   [History] {text}")
+            
+            await proc.wait()
             if proc.returncode == 0:
                 logger.info("✅ История успешно собрана")
             else:
-                logger.error(f"❌ Ошибка сбора истории: {stderr.decode()}")
+                logger.error(f"❌ Ошибка сбора истории (код {proc.returncode})")
         except Exception as e:
             logger.error(f"❌ Ошибка запуска collect_history.py: {e}")
 
