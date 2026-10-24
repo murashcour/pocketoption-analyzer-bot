@@ -55,6 +55,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FINAL_V5
 # FIX_SHOWONLY
 # TREND_5M
+# AUTO_2STEPS
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1805,13 +1806,42 @@ async def run_manual_mode(client, state, stopper, mode):
             logger.info(f"   ⏸ Пауза {_pause_sig}с после сигнала (manual_signal_pause_sec)")
             await stopper.sleep(_pause_sig)
 
-            # FIX_SHOWONLY: в show-only — сразу дальше (без input)
+            # AUTO_2STEPS: виртуальный подсчёт для show-only
             if mode == "show-only":
-                logger.info("   [show-only] Автоматически дальше...")
-                state.change_pair("ручной: show-only дальше")
+                logger.info("   [show-only] Ждём закрытия свечи (60 сек)...")
+                await stopper.sleep(65)
+                
+                current_price = await get_current_price(client, pair)
+                if current_price is not None:
+                    if signal == "CALL":
+                        is_win = current_price > entry_price
+                    else:
+                        is_win = current_price < entry_price
+                    
+                    if is_win:
+                        manual_wins += 1
+                        manual_total += 1
+                        print(f"\033[92m   ✅ VIRTUAL WIN (всего: {manual_total})\033[0m")
+                    else:
+                        manual_losses += 1
+                        manual_total += 1
+                        print(f"\033[91m   ❌ VIRTUAL LOSS (всего: {manual_total})\033[0m")
+                    
+                    if manual_total > 0:
+                        wr = manual_wins / manual_total * 100
+                        print(f"\n📊 [Статистика] ✅ {manual_wins} / ❌ {manual_losses} "
+                              f"| Всего: {manual_total} | Winrate: {wr:.1f}%\n")
+                else:
+                    logger.warning("   [show-only] Не удалось получить цену для проверки")
+                
+                if is_win:
+                    logger.info("   [show-only] WIN — проверяю ту же пару...")
+                else:
+                    logger.info("   [show-only] LOSS — смена пары...")
+                    state.change_pair("ручной: show-only loss")
                 continue
 
-            # FINAL_V5: счётчик (+ / - / 0) — только для --confirm
+            # COUNTER_V3: + / - / 0 (для --confirm)
             ans_res = await asyncio.to_thread(
                 input, "   Результат? [+ = win / - = loss / 0 = skip / Enter = пропустить]: "
             )
@@ -1829,12 +1859,21 @@ async def run_manual_mode(client, state, stopper, mode):
                 print(f"   ⏸ SKIP (пропущено: {manual_skips})")
             else:
                 print(f"   ⏭ Пропущено (без учёта)")
-            # Показать статистику
+            
             if manual_total > 0:
                 wr = manual_wins / manual_total * 100
                 print(f"\n📊 [Статистика] ✅ {manual_wins} / ❌ {manual_losses} / ⏸ {manual_skips} "
                       f"| Всего: {manual_total} | Winrate: {wr:.1f}%\n")
-            # В confirm — ждём Enter
+
+            # SAME_PAIR_ON_WIN: + → та же пара, иначе → смена
+            if mode == "show-only":
+                if ans_res == "+":
+                    logger.info("   [show-only] WIN — проверяю ту же пару...")
+                else:
+                    logger.info("   [show-only] Автоматически дальше...")
+                    state.change_pair("ручной: show-only дальше")
+                continue
+
             ans = await asyncio.to_thread(
                 input, "   Нажмите Enter, когда готовы [q=выход]: "
             )
@@ -1844,7 +1883,6 @@ async def run_manual_mode(client, state, stopper, mode):
                 return
 
             if mode == "confirm":
-                # Спросить ставку
                 bet_str = await asyncio.to_thread(
                     input, "   Ставка? [1 / 2 / 4 / custom]: "
                 )
@@ -1866,7 +1904,6 @@ async def run_manual_mode(client, state, stopper, mode):
                         bet = None
 
                 if bet:
-                    # Спросить: открывать?
                     ans = await asyncio.to_thread(
                         input, f"   Открыть {signal} ${bet:.2f}? [y/n/s/q]: "
                     )
@@ -1888,7 +1925,6 @@ async def run_manual_mode(client, state, stopper, mode):
                     elif ans == "s":
                         state.change_pair("ручной: смена пары")
                         continue
-                    # n или другое — пропустить
 
         else:
             logger.info(f"⏸ [{now}] Пропуск на {pair}")
