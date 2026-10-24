@@ -58,6 +58,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # AUTO_2STEPS
 # PAUSE_20
 # LIVE_CANDLES_FIX
+# CHECKLIST_ALL
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -84,7 +85,7 @@ DEFAULT_CONFIG = {
     "rsi_bull_min": 53,
     "rsi_bear_max": 47,
     "sr_lookback": 50,
-    "sr_proximity_percent": 0.05,
+    "sr_proximity_percent": 0.15,
     "atr_period": 14,
     "atr_min_percent": 0.015,
     "tf_3m_rsi_bull": 54,
@@ -410,13 +411,8 @@ def analyze_1m(candles: List) -> Optional[str]:
     if bear >= mc and bear > bull and bear < total:
         logger.info(f"   [1м] PUT | {bear}/{total}")
         return "PUT"
-    # 5/5 — сильный сигнал, а не перегрев (для тестов)
-    if bull == total and bull >= mc:
-        logger.info(f"   [1м] CALL | {bull}/{total} (все!)")
-        return "CALL"
-    if bear == total and bear >= mc:
-        logger.info(f"   [1м] PUT | {bear}/{total} (все!)")
-        return "PUT"
+    # CHECKLIST_ALL: Убрали сигналы "5/5 (все!)", так как они часто ловят перегрев/разворот
+    # Оставляем только сигналы, где есть хотя бы одно противоречие (4/5 или 3/5)
 
     logger.info(f"   [1м] Нет ({bull}/{bear})")
     return None
@@ -744,11 +740,24 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
     """
-    Открывает сделку СРАЗУ (без запроса цены перед открытием).
-    Возвращает deal dict или None.
+    Открывает сделку СРАЗУ.
+    CHECKLIST_ALL: Добавлена двойная проверка payout прямо перед открытием.
     """
     try:
         bet = steps[step_idx]
+        
+        # CHECKLIST_ALL: Двойная проверка payout
+        live_payout = await check_payout(client, p)
+        pmin, pmax = get_payout_range(p)
+        if live_payout is None or live_payout < pmin or live_payout > pmax:
+            logger.warning(f"   ⚠ Payout изменился перед открытием: {live_payout}% вне [{pmin}, {pmax}]%. Отмена сделки.")
+            return None
+            
+        # CHECKLIST_ALL: Проверка на payout 0% (хотя бы минимальный порог)
+        if live_payout <= 10:
+            logger.warning(f"   ⚠ Payout слишком низкий ({live_payout}%) — отмена сделки.")
+            return None
+
         t0 = time.time()
         if sig == "CALL":
             trade_id, _ = await client.buy(p, bet, CFG["expiration"])
@@ -764,9 +773,10 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
             "signal": sig,
             "open_time": time.time(),
             "step": step_idx + 1,
+            "payout": live_payout, # Сохраняем payout для истории
         }
         dir_str = "ВВЕРХ ⬆️ (CALL)" if sig == "CALL" else "ВНИЗ ⬇️ (PUT)"
-        logger.info(f"📈 [{step_idx+1}/{len(steps)}] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек)")  # FIX_STEP_LOG
+        logger.info(f"📈 [{step_idx+1}/{len(steps)}] Открыл ${bet:.2f} {dir_str} на {p} (за {dt:.2f} сек, payout {live_payout}%)")
         return deal
     except (PocketOptionError, ConnectionError, OSError) as e:
         logger.error(f"❌ СЕТЕВАЯ ошибка открытия ${steps[step_idx]:.2f}: {e}")
@@ -1254,8 +1264,17 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         state.last_steps = steps
     direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
 
+    # CHECKLIST_ALL: Цветной вывод серии
+    if signal == "CALL":
+        color_code = "\033[94m"  # Синий
+    else:
+        color_code = "\033[91m"  # Красный
+    reset_code = "\033[0m"
+
     logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
     logger.info(f"   Ступени: {steps}")
+    print(f"{color_code}\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}{reset_code}")
+    print(f"{color_code}   Ступени: {steps}{reset_code}")
 
     # ===== ШАГ 1: 1-я ступень (полный вход) =====
     pair, deal_1, entry_1 = await _open_step_1(client, pair, signal, entry_price, steps, stopper, state=state)
