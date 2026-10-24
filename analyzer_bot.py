@@ -54,6 +54,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # MANUAL_V4
 # FINAL_V5
 # FIX_SHOWONLY
+# TREND_5M
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -547,33 +548,29 @@ async def full_analysis(client, pair: str):
 
     # MANUAL_V4: 5м RSI фильтр убран (оставлен 15м)
 
-    # MANUAL_V4: 15м тренд (EMA20 vs EMA50)
-    if c15 and len(c15) >= 30:
-        closes_15 = [get_close(c) for c in c15]
-        e20_15 = ema(closes_15, 20)
-        e50_15 = ema(closes_15, 50)
-        if e20_15 is not None and e50_15 is not None:
-            trend_15 = "CALL" if e20_15 > e50_15 else "PUT"
-            logger.info(f"   [15м тренд] {trend_15} (EMA20 vs EMA50)")
-            if trend_15 != sig_1m:
-                logger.info(f"   [15м тренд] конфликт с 1м ({sig_1m}) — пропуск")
-                return None, None, "CONFLICT_15M_TREND"
+    # TREND_5M: 5м тренд (EMA20 vs EMA50)
+    if c5 and len(c5) >= 30:
+        closes_5 = [get_close(c) for c in c5]
+        e20_5 = ema(closes_5, 20)
+        e50_5 = ema(closes_5, 50)
+        if e20_5 is not None and e50_5 is not None:
+            trend_5 = "CALL" if e20_5 > e50_5 else "PUT"
+            logger.info(f"   [5м тренд] {trend_5} (EMA20 vs EMA50)")
+            if trend_5 != sig_1m:
+                logger.info(f"   [5м тренд] конфликт с 1м ({sig_1m}) — пропуск")
+                return None, None, "CONFLICT_5M_TREND"
+    else:
+        logger.info(f"   [{pair}] 5м мало данных (тренд не проверен)")
 
-    # 15м — как 5м + extreme RSI
+    # 15м — только extreme RSI (не блокируем, если мало данных)
     if c15 and len(c15) >= 30:
-        # Конфликт направления (как 5м)
-        sig_15m = analyze_3m(c15)
-        if sig_15m is not None and sig_15m != sig_1m:
-            logger.info(f"   [15м] {sig_15m} — конфликт с 1м ({sig_1m})")
-            return None, None, "CONFLICT_15M"
-        # Extreme RSI
         ok, msg = analyze_10m_filter(c15, "15м")
         logger.info(f"   [{msg}]")
         if not ok:
             logger.info(f"   [{pair}] 15м блокирует сделку (RSI extreme)")
             return None, None, "CONFLICT_15M"
     else:
-        logger.info(f"   [{pair}] 15м мало данных")
+        logger.info(f"   [{pair}] 15м мало данных (RSI не проверен)")
 
     logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 5м + 15м + S/R + ATR OK) @ {price}")
     return sig_1m, price, "OK"
