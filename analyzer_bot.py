@@ -60,6 +60,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # LIVE_CANDLES_FIX
 # CHECKLIST_ALL
 # COLORS_FINAL
+# AUTO_HISTORY
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -2088,8 +2089,49 @@ class Trader:
             except KeyboardInterrupt:
                 return
 
+    async def _update_history_and_stats(self):
+        """AUTO_HISTORY: Запускает сбор истории и обновление статистики."""
+        logger.info("=" * 60)
+        logger.info("🔄 AUTO_HISTORY: Обновление истории и статистики...")
+        
+        # 1. Запускаем collect_history.py
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "collect_history.py",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                logger.info("✅ История успешно собрана")
+            else:
+                logger.error(f"❌ Ошибка сбора истории: {stderr.decode()}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска collect_history.py: {e}")
+
+        # 2. Запускаем update_stats.py
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "update_stats.py",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                logger.info("✅ Статистика обновлена")
+            else:
+                logger.error(f"❌ Ошибка обновления статистики: {stderr.decode()}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка запуска update_stats.py: {e}")
+        
+        logger.info("=" * 60)
+
     async def _run_with_client(self, client):
         """Тело торгового цикла. client — уже подключённый."""
+        
+        # AUTO_HISTORY: Обновление истории и статистики перед стартом
+        await self._update_history_and_stats()
+        
         try:
             balance = float(await client.balance())
             logger.info(f"💰 Баланс: ${balance:.2f}")
@@ -2135,6 +2177,10 @@ class Trader:
 
         last_payout_check = time.time()
 
+        # AUTO_HISTORY: таймер обновления (5 часов = 18000 сек)
+        last_history_update = time.time()
+        history_update_interval = 5 * 3600  # 5 часов
+
         while True:
             # === АВТОСТОП 24 ЧАСА ===
             if time.time() - self.start_time >= self.max_runtime_sec:
@@ -2143,6 +2189,17 @@ class Trader:
                 if self.state:
                     logger.info(self.state.summary())
                 return
+
+            # === AUTO_HISTORY: проверка на обновление каждые 5 часов ===
+            if time.time() - last_history_update >= history_update_interval:
+                logger.info("⏸ Пауза для обновления истории (5 часов прошло)...")
+                await self._update_history_and_stats()
+                # Перезагружаем пары после обновления
+                new_pairs = await load_currency_pairs(client)
+                if new_pairs:
+                    self.state.update_pairs(new_pairs)
+                last_history_update = time.time()
+                logger.info("✅ Торговля возобновлена")
 
             try:
                 if self.stopper.requested():
