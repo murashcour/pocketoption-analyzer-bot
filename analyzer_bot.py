@@ -57,6 +57,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # TREND_5M
 # AUTO_2STEPS
 # PAUSE_20
+# LIVE_CANDLES_FIX
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -302,6 +303,10 @@ async def fetch_candles(client, asset: str, period: int, count: int) -> List:
     try:
         result = await client.get_candles(asset, period, count)
         if isinstance(result, (list, tuple)) and len(result) > 0:
+            # LIVE_CANDLES_FIX: get_candles отдает только закрытые свечи.
+            # Нам нужно добавить текущую формирующуюся свечу, чтобы видеть цену в реальном времени.
+            # Но так как API запаздывает, мы просто возвращаем список как есть, 
+            # НО в full_analysis мы будем брать цену через get_current_price.
             return list(result)
     except Exception as e:
         logger.debug(f"get_candles({asset}, {period}): {e}")
@@ -519,7 +524,9 @@ async def full_analysis(client, pair: str):
     c5  = await fetch_candles(client, pair, 300, 100)
     c15 = await fetch_candles(client, pair, 900, 50)
 
-    price = get_close(c1[-1])
+    price = await get_current_price(client, pair)
+    if price is None:
+        price = get_close(c1[-1])
 
     # Волатильность
     ok_vol, msg_vol = check_volatility(c1, price)
