@@ -60,6 +60,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # LIVE_CANDLES_FIX
 # CHECKLIST_ALL
 # COLORS_FINAL
+# SERVER_FIX_V1
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -539,20 +540,7 @@ async def full_analysis(client, pair: str):
         logger.info(f"   [{pair}] S/R блокирует сделку")
         return None, None, "SR"
 
-    # MANUAL_V4: ADX (5м) — фильтр флэта
-    if c5 and len(c5) >= 30:
-        adx_val = adx(c5, 14)
-        if adx_val is not None:
-            logger.info(f"   [ADX 5м] {adx_val:.1f}")
-            if adx_val < 20:
-                logger.info(f"   [ADX 5м] флэт (< 20) — пропуск")
-                return None, None, "ADX_FLAT"
-            elif adx_val > 25:
-                logger.info(f"   [ADX 5м] тренд (> 25) — OK")
-            else:
-                logger.info(f"   [ADX 5м] нейтрально (20-25) — OK")
-
-    # MANUAL_V4: 5м RSI фильтр убран (оставлен 15м)
+    # SERVER_FIX: ADX убран (перегруз фильтрами, PDF)
 
     # TREND_5M: 5м тренд (EMA20 vs EMA50)
     if c5 and len(c5) >= 30:
@@ -568,15 +556,7 @@ async def full_analysis(client, pair: str):
     else:
         logger.info(f"   [{pair}] 5м мало данных (тренд не проверен)")
 
-    # 15м — только extreme RSI (не блокируем, если мало данных)
-    if c15 and len(c15) >= 30:
-        ok, msg = analyze_10m_filter(c15, "15м")
-        logger.info(f"   [{msg}]")
-        if not ok:
-            logger.info(f"   [{pair}] 15м блокирует сделку (RSI extreme)")
-            return None, None, "CONFLICT_15M"
-    else:
-        logger.info(f"   [{pair}] 15м мало данных (RSI не проверен)")
+    # SERVER_FIX: 15м RSI убран (оставлен только 5м тренд)
 
     logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 5м + 15м + S/R + ATR OK) @ {price}")
     return sig_1m, price, "OK"
@@ -969,9 +949,15 @@ async def _ensure_good_payout(client, pair: str, step_name: str, state, stopper)
             f"на {pair} — меняю пару"
         )
         if state is not None:
+            _old_pair = pair
             state.change_pair(f"{step_name}: payout вне диапазона")
             pair = state.current_pair()
-            changed = True
+            # SERVER_FIX: проверяем, реально ли сменилась пара
+            if pair != _old_pair:
+                changed = True
+            else:
+                logger.warning(f"   ⚠ {step_name}: пара не сменилась, но payout плохой — отмена")
+                return pair, False, False
 
         attempts += 1
         if attempts >= max_attempts:
