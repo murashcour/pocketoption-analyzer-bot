@@ -62,6 +62,9 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # COLORS_FINAL
 # SERVER_FIX_V1
 # DEFAULT_CONFIG_SAFE
+# ENTRY_PAUSE
+# PAIR_STATS_FILTER
+# CLEAN_MENU
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -89,6 +92,8 @@ DEFAULT_CONFIG = {
     "rsi_bear_max": 47,
     "sr_lookback": 50,
     "sr_proximity_percent": 0.15,
+    "pair_stats_enabled": True,
+    "pair_stats_min_winrate": 55.0,
     "atr_period": 14,
     "atr_min_percent": 0.015,
     "tf_3m_rsi_bull": 54,
@@ -871,6 +876,10 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
             if new_sig != signal:
                 logger.info(f"   ⚠ 1-я: сигнал изменился ({signal} → {new_sig}) — открываю новый")
             signal, entry_price = new_sig, new_entry
+
+        # ENTRY_PAUSE: Пауза 1 сек перед открытием (чтобы цена устоялась)
+        logger.info("   ⏱ Пауза 1 сек перед открытием...")
+        await stopper.sleep(1)
 
         # 2. Momentum check
         ok = await _check_momentum(client, pair, signal, entry_price)
@@ -1666,6 +1675,59 @@ def check_news_pause():
 
     return False, 0, None
 
+
+# PAIR_STATS_FILTER: фильтр пар по истории
+import json as _json
+import os as _os
+
+def _load_pair_stats(min_winrate: float = 55.0):
+    """Загружает pair_stats.json и возвращает dict {'PAIR': winrate}."""
+    p = _os.path.join(BASE_DIR, "pair_stats.json")
+    if not _os.path.exists(p):
+        logger.warning("pair_stats.json не найден — торгуем без фильтра")
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except Exception as e:
+        logger.error(f"pair_stats.json битый: {e} — без фильтра")
+        return {}
+    
+    good = {}
+    for pair, st in data.items():
+        wr = None
+        if isinstance(st, dict):
+            if "winrate" in st:
+                wr = st["winrate"]
+            elif "wins" in st and "losses" in st:
+                total = st["wins"] + st["losses"]
+                if total > 0:
+                    wr = (st["wins"] / total) * 100
+        elif isinstance(st, (int, float)):
+            wr = float(st)
+        
+        if wr is not None and wr >= min_winrate:
+            good[pair] = wr
+            
+    logger.info(f"📊 pair_stats: {len(good)}/{len(data)} пар с Winrate ≥ {min_winrate}%")
+    return good
+
+def _filter_pairs_by_stats(pairs: list, min_winrate: float = 55.0):
+    if not CFG.get("pair_stats_enabled", False):
+        return pairs
+    good = _load_pair_stats(min_winrate)
+    if not good:
+        return pairs
+    filtered = [p for p in pairs if p in good]
+    if not filtered:
+        logger.warning("⚠ Фильтр отсёк все пары — откат к полному списку")
+        return pairs
+    dropped = [p for p in pairs if p not in good]
+    if dropped:
+        logger.info(f"🚫 Отсеяно {len(dropped)} пар: {dropped[:10]}{'...' if len(dropped)>10 else ''}")
+    return filtered
+
+
 async def load_currency_pairs(client) -> List[str]:
     """
     Загружает OTC + Real пары с разными payout-фильтрами.
@@ -1775,7 +1837,7 @@ async def load_currency_pairs(client) -> List[str]:
     if pairs:
         logger.info(f"📋 {', '.join(pairs)}")
 
-    return pairs
+    return _filter_pairs_by_stats(pairs, CFG.get('pair_stats_min_winrate', 55.0))
 # ==================== ОСНОВНОЙ ЦИКЛ ====================
 # ==================== MAIN LOOP ====================
 async def run_manual_mode(client, state, stopper, mode):
@@ -2363,27 +2425,18 @@ class Trader:
 MENU_FIELDS = [
     # ==================== Основные ====================
     ("expiration",                "Экспирация сделки (сек)",              "Trade expiration (sec)"),
-    ("check_interval_sec",        "Интервал проверки серии (сек)",        "Series check interval (sec)"),
-    ("max_checks",                "Макс. проверок в серии",               "Max checks in series"),
-    ("base_percent",              "Базовый % от баланса",                 "Base % of balance"),
-    ("min_balance_for_percent",   "Мин. баланс для %-режима ($)",         "Min balance for % mode ($)"),
+    ("fixed_steps",               "Фиксированные ставки (USD)",           "Fixed bets (USD)"),
+    ("martingale_steps_count",    "Ступеней в серии (1-4)",               "Steps in series (1-4)"),
+    ("pure_martingale",           "Догон 2-й по сигналу (True/False)",    "Chase 2nd by signal (True/False)"),
+    ("manual_signal_pause_sec",   "Пауза после сигнала (сек)",            "Pause after signal (sec)"),
 
-    # ==================== Payout OTC ====================
+    # ==================== Payout ====================
     ("payout_min_otc",            "Мин. payout OTC (%)",                  "Min OTC payout (%)"),
     ("payout_max_otc",            "Макс. payout OTC (%)",                 "Max OTC payout (%)"),
-
-    # ==================== Payout Real ====================
-    ("payout_min_real",           "Мин. payout Real (%)",                 "Min Real payout (%)"),
-    ("payout_max_real",           "Макс. payout Real (%)",                "Max Real payout (%)"),
-
-    # ==================== Общие payout ====================
     ("payout_recheck_sec",        "Перепроверка payout (сек)",            "Payout recheck (sec)"),
 
     # ==================== Real-пары ====================
     ("include_real",              "Включать Real-пары (True/False)",      "Include Real pairs (True/False)"),
-    ("real_asset_types",          "Типы Real (currency)",                 "Real types (currency)"),
-    ("timezone",                  "Часовой пояс (Europe/Moscow)",         "Timezone (Europe/Moscow)"),
-    ("forex_trade_days",          "Дни Forex (0=Пн..4=Пт)",               "Forex days (0=Mon..4=Fri)"),
 
     # ==================== Анализ 1м ====================
     ("min_confirmations",         "Мин. подтверждений сигнала",           "Min signal confirmations"),
@@ -2400,30 +2453,22 @@ MENU_FIELDS = [
     ("atr_period",                "ATR период",                           "ATR period"),
     ("atr_min_percent",           "ATR мин. волатильность (%)",           "ATR min volatility (%)"),
 
-    # ==================== Мульти-ТФ ====================
-    ("tf_3m_rsi_bull",            "3м RSI бычий порог",                   "3m RSI bullish threshold"),
-    ("tf_3m_rsi_bear",            "3м RSI медвежий порог",                "3m RSI bearish threshold"),
-    ("tf_3m_neutral_blocks",      "3м нейтральный блокирует (True/False)", "3m neutral blocks (True/False)"),
-    ("tf_10m_overbought",         "10м RSI перекуп",                      "10m RSI overbought"),
-    ("tf_10m_oversold",           "10м RSI перепрод",                     "10m RSI oversold"),
-
     # ==================== Пропуски ====================
     ("skip_before_change_plus",   "Пропусков после +серии",               "Skips after winning series"),
     ("skip_before_change_minus",  "Пропусков после -серии",               "Skips after losing series"),
 
     # ==================== Просадка ====================
     ("max_drawdown_percent",      "Макс. просадка (%)",                   "Max drawdown (%)"),
-    ("drawdown_pause_sec",        "Пауза при просадке (сек)",             "Drawdown pause (sec)"),
     ("drawdown_max_count",        "Макс. кол-во просадок",                "Max drawdown count"),
+    ("pause_after_losses",        "Пауза после N минусов",                "Pause after N losses"),
 
     # ==================== Новости ====================
     ("news_enabled",              "Пауза при новостях (True/False)",      "News pause enabled (True/False)"),
     ("news_importance_min",       "Мин. важность (2=Medium,3=High)",      "Min importance (2=Med, 3=High)"),
-    ("news_pre_pause_min",        "Пауза ДО новости (мин)",               "Pre-news pause (min)"),
-    ("news_post_pause_min",       "Пауза ПОСЛЕ новости (мин)",            "Post-news pause (min)"),
-    ("news_currencies",           "Валюты новостей (USD,EUR..)",          "News currencies (USD,EUR..)"),
-    ("news_refresh_hours",        "Обновление календаря (часы)",          "Calendar refresh (hours)"),
-    ("news_fallback_stop",        "СТОП если календарь не загружен",      "STOP if calendar not loaded"),
+
+    # ==================== Фильтр pair_stats ====================
+    ("pair_stats_enabled",        "Фильтр по pair_stats (True/False)",    "Filter by pair_stats (True/False)"),
+    ("pair_stats_min_winrate",    "Мин. Winrate пары (%)",                "Min pair Winrate (%)"),
 ]
 
 def _format_value(val) -> str:
