@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.append(os.path.expanduser("~/Git/pocketoption-analyzer-bot"))
 from BinaryOptionsToolsV2 import PocketOptionAsync
 
+# HISTORY_APPEND
 # Настройки
 HISTORY_DIR = Path("history")
 HISTORY_DIR.mkdir(exist_ok=True)
@@ -27,22 +28,49 @@ async def download_pair(client, pair):
             print(f"⚠ {pair}: мало данных ({len(candles) if candles else 0})")
             return
         
-        # Сохраняем в CSV
+        # HISTORY_APPEND: дописываем, а не перезаписываем
         filename = HISTORY_DIR / f"{pair}.csv"
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
+        file_exists = filename.exists()
+        
+        # Читаем существующие timestamp, чтобы не дублировать
+        existing_ts = set()
+        if file_exists:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    next(reader, None)  # пропускаем заголовок
+                    for row in reader:
+                        if row:
+                            existing_ts.add(row[0])
+            except Exception as e:
+                print(f"⚠ {pair}: ошибка чтения существующего файла: {e}")
+                file_exists = False
+        
+        # Открываем на дописывание ('a') или создание ('w')
+        mode = 'a' if file_exists else 'w'
+        with open(filename, mode, newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(["timestamp", "open", "high", "low", "close", "volume"])
+            if not file_exists:
+                writer.writerow(["timestamp", "open", "high", "low", "close", "volume"])
+            
+            added = 0
             for c in candles:
-                # Пытаемся извлечь поля (dict или tuple)
                 if isinstance(c, dict):
                     ts = c.get("time", c.get("timestamp", ""))
+                    if str(ts) in existing_ts:
+                        continue  # уже есть, пропускаем
                     writer.writerow([ts, c["open"], c["high"], c["low"], c["close"], c.get("volume", 0)])
+                    added += 1
                 elif isinstance(c, (list, tuple)):
-                    writer.writerow([c[0], c[1], c[2], c[3], c[4], c[5] if len(c) > 5 else 0])
+                    ts = c[0]
+                    if str(ts) in existing_ts:
+                        continue
+                    writer.writerow([ts, c[1], c[2], c[3], c[4], c[5] if len(c) > 5 else 0])
+                    added += 1
                 else:
                     print(f"⚠ {pair}: неизвестный формат свечи: {type(c)}")
                     return
-        print(f"✅ {pair}: сохранено {len(candles)} свечей")
+        print(f"✅ {pair}: добавлено {added} свечей (всего в файле: ~{len(existing_ts) + added})")
     except Exception as e:
         print(f"❌ {pair}: ошибка {e}")
 

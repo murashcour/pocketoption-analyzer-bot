@@ -60,15 +60,20 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # LIVE_CANDLES_FIX
 # CHECKLIST_ALL
 # COLORS_FINAL
+# SERVER_FIX_V1
+# DEFAULT_CONFIG_SAFE
+# ENTRY_PAUSE
+# PAIR_STATS_FILTER
+# CLEAN_MENU
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
-    "fixed_steps": [1.0, 2.0, 4.0, 8.0],
-    "martingale_steps_count": 3,
-    "pure_martingale": True,
-    "martingale_enabled": True,
+    "fixed_steps": [1.0],
+    "martingale_steps_count": 1,
+    "pure_martingale": False,
+    "martingale_enabled": False,
     "payout_min": 85,
     "payout_max": 92,
     "payout_min_otc": 90,
@@ -76,7 +81,7 @@ DEFAULT_CONFIG = {
     "payout_min_real": 85,
     "payout_max_real": 92,
     "payout_recheck_sec": 600,
-    "include_real": True,
+    "include_real": False,
     "real_asset_types": ["currency"],
     "timezone": "Europe/Moscow",
     "forex_trade_days": [0, 1, 2, 3, 4],
@@ -86,7 +91,9 @@ DEFAULT_CONFIG = {
     "rsi_bull_min": 53,
     "rsi_bear_max": 47,
     "sr_lookback": 50,
-    "sr_proximity_percent": 0.15,
+    "sr_proximity_percent": 0.5,
+    "pair_stats_enabled": True,
+    "pair_stats_min_winrate": 50.0,
     "atr_period": 14,
     "atr_min_percent": 0.015,
     "tf_3m_rsi_bull": 54,
@@ -96,7 +103,7 @@ DEFAULT_CONFIG = {
     "tf_10m_oversold": 25,
     "skip_before_change_plus": 3,
     "skip_before_change_minus": 2,
-    "max_drawdown_percent": 30,
+    "max_drawdown_percent": 15,
     "max_drawdown_percent_double": 50,
     "drawdown_pause_sec": 1800,
     "drawdown_max_count": 1,
@@ -112,9 +119,9 @@ DEFAULT_CONFIG = {
     "candle_start_max_sec": 8,
     "human_delay_sec": 0,
     "step3_pause_between_circles_sec": 30,
-    "wait_candle_start_enabled": True,
-    "wait_candle_start_step3_4": True,
-    "no_signal_pause_sec": 60,
+    "wait_candle_start_enabled": False,
+    "wait_candle_start_step3_4": False,
+    "no_signal_pause_sec": 5,
     "manual_signal_pause_sec": 20,
     "double_martingale_enabled": False,
     "balance_tiers_enabled": False,
@@ -135,7 +142,7 @@ DEFAULT_CONFIG = {
     "bad_hours_max_winrate": 30.0,
     "check_interval_step4_sec": 45,
     "log_timezone_offset_hours": 3,
-    "pause_after_losses": 4,
+    "pause_after_losses": 10,
     "pause_after_losses_sec": 1800,
 }
 # /DEFAULT_CONFIG_V2
@@ -458,6 +465,8 @@ def analyze_10m_filter(candles: List, tf_name: str) -> Tuple[bool, str]:
 def find_support_resistance(candles: List) -> Tuple[float, float]:
     """Находит уровни поддержки и сопротивления за N свечей."""
     lookback = CFG["sr_lookback"]
+    if lookback == 0:
+        return 0.0, 0.0
     if len(candles) < lookback:
         lookback = len(candles)
     recent = candles[-lookback:]
@@ -469,6 +478,8 @@ def find_support_resistance(candles: List) -> Tuple[float, float]:
 def check_sr_proximity(price: float, support: float, resistance: float,
                        signal: str) -> Tuple[bool, str]:
     """Проверяет близость цены к уровням S/R."""
+    if support == 0.0 and resistance == 0.0:
+        return True, "S/R отключён"
     if price <= 0:
         return True, "S/R: цена 0"
     threshold = price * CFG["sr_proximity_percent"] / 100
@@ -539,20 +550,7 @@ async def full_analysis(client, pair: str):
         logger.info(f"   [{pair}] S/R блокирует сделку")
         return None, None, "SR"
 
-    # MANUAL_V4: ADX (5м) — фильтр флэта
-    if c5 and len(c5) >= 30:
-        adx_val = adx(c5, 14)
-        if adx_val is not None:
-            logger.info(f"   [ADX 5м] {adx_val:.1f}")
-            if adx_val < 20:
-                logger.info(f"   [ADX 5м] флэт (< 20) — пропуск")
-                return None, None, "ADX_FLAT"
-            elif adx_val > 25:
-                logger.info(f"   [ADX 5м] тренд (> 25) — OK")
-            else:
-                logger.info(f"   [ADX 5м] нейтрально (20-25) — OK")
-
-    # MANUAL_V4: 5м RSI фильтр убран (оставлен 15м)
+    # SERVER_FIX: ADX убран (перегруз фильтрами, PDF)
 
     # TREND_5M: 5м тренд (EMA20 vs EMA50)
     if c5 and len(c5) >= 30:
@@ -568,16 +566,12 @@ async def full_analysis(client, pair: str):
     else:
         logger.info(f"   [{pair}] 5м мало данных (тренд не проверен)")
 
-    # 15м — только extreme RSI (не блокируем, если мало данных)
-    if c15 and len(c15) >= 30:
-        ok, msg = analyze_10m_filter(c15, "15м")
-        logger.info(f"   [{msg}]")
-        if not ok:
-            logger.info(f"   [{pair}] 15м блокирует сделку (RSI extreme)")
-            return None, None, "CONFLICT_15M"
-    else:
-        logger.info(f"   [{pair}] 15м мало данных (RSI не проверен)")
+    # SERVER_FIX: 15м RSI убран (оставлен только 5м тренд)
 
+    if sig_1m == "CALL":
+        print(f"\033[94m   🎯 СИГНАЛ: {sig_1m} (1м + 5м + 15м + S/R + ATR OK) @ {price}\033[0m")
+    else:
+        print(f"\033[91m   🎯 СИГНАЛ: {sig_1m} (1м + 5м + 15м + S/R + ATR OK) @ {price}\033[0m")
     logger.info(f"   🎯 СИГНАЛ: {sig_1m} (1м + 5м + 15м + S/R + ATR OK) @ {price}")
     return sig_1m, price, "OK"
 
@@ -891,6 +885,10 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                 logger.info(f"   ⚠ 1-я: сигнал изменился ({signal} → {new_sig}) — открываю новый")
             signal, entry_price = new_sig, new_entry
 
+        # ENTRY_PAUSE: Пауза 1 сек перед открытием (чтобы цена устоялась)
+        logger.info("   ⏱ Пауза 1 сек перед открытием...")
+        await stopper.sleep(1)
+
         # 2. Momentum check
         ok = await _check_momentum(client, pair, signal, entry_price)
         if not ok:
@@ -969,9 +967,15 @@ async def _ensure_good_payout(client, pair: str, step_name: str, state, stopper)
             f"на {pair} — меняю пару"
         )
         if state is not None:
+            _old_pair = pair
             state.change_pair(f"{step_name}: payout вне диапазона")
             pair = state.current_pair()
-            changed = True
+            # SERVER_FIX: проверяем, реально ли сменилась пара
+            if pair != _old_pair:
+                changed = True
+            else:
+                logger.warning(f"   ⚠ {step_name}: пара не сменилась, но payout плохой — отмена")
+                return pair, False, False
 
         attempts += 1
         if attempts >= max_attempts:
@@ -1679,6 +1683,59 @@ def check_news_pause():
 
     return False, 0, None
 
+
+# PAIR_STATS_FILTER: фильтр пар по истории
+import json as _json
+import os as _os
+
+def _load_pair_stats(min_winrate: float = 55.0):
+    """Загружает pair_stats.json и возвращает dict {'PAIR': winrate}."""
+    p = _os.path.join(BASE_DIR, "pair_stats.json")
+    if not _os.path.exists(p):
+        logger.warning("pair_stats.json не найден — торгуем без фильтра")
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except Exception as e:
+        logger.error(f"pair_stats.json битый: {e} — без фильтра")
+        return {}
+    
+    good = {}
+    for pair, st in data.items():
+        wr = None
+        if isinstance(st, dict):
+            if "winrate" in st:
+                wr = st["winrate"]
+            elif "wins" in st and "losses" in st:
+                total = st["wins"] + st["losses"]
+                if total > 0:
+                    wr = (st["wins"] / total) * 100
+        elif isinstance(st, (int, float)):
+            wr = float(st)
+        
+        if wr is not None and wr >= min_winrate:
+            good[pair] = wr
+            
+    logger.info(f"📊 pair_stats: {len(good)}/{len(data)} пар с Winrate ≥ {min_winrate}%")
+    return good
+
+def _filter_pairs_by_stats(pairs: list, min_winrate: float = 55.0):
+    if not CFG.get("pair_stats_enabled", False):
+        return pairs
+    good = _load_pair_stats(min_winrate)
+    if not good:
+        return pairs
+    filtered = [p for p in pairs if p in good]
+    if not filtered:
+        logger.warning("⚠ Фильтр отсёк все пары — откат к полному списку")
+        return pairs
+    dropped = [p for p in pairs if p not in good]
+    if dropped:
+        logger.info(f"🚫 Отсеяно {len(dropped)} пар: {dropped[:10]}{'...' if len(dropped)>10 else ''}")
+    return filtered
+
+
 async def load_currency_pairs(client) -> List[str]:
     """
     Загружает OTC + Real пары с разными payout-фильтрами.
@@ -1788,7 +1845,7 @@ async def load_currency_pairs(client) -> List[str]:
     if pairs:
         logger.info(f"📋 {', '.join(pairs)}")
 
-    return pairs
+    return _filter_pairs_by_stats(pairs, CFG.get('pair_stats_min_winrate', 55.0))
 # ==================== ОСНОВНОЙ ЦИКЛ ====================
 # ==================== MAIN LOOP ====================
 async def run_manual_mode(client, state, stopper, mode):
@@ -2376,27 +2433,18 @@ class Trader:
 MENU_FIELDS = [
     # ==================== Основные ====================
     ("expiration",                "Экспирация сделки (сек)",              "Trade expiration (sec)"),
-    ("check_interval_sec",        "Интервал проверки серии (сек)",        "Series check interval (sec)"),
-    ("max_checks",                "Макс. проверок в серии",               "Max checks in series"),
-    ("base_percent",              "Базовый % от баланса",                 "Base % of balance"),
-    ("min_balance_for_percent",   "Мин. баланс для %-режима ($)",         "Min balance for % mode ($)"),
+    ("fixed_steps",               "Фиксированные ставки (USD)",           "Fixed bets (USD)"),
+    ("martingale_steps_count",    "Ступеней в серии (1-4)",               "Steps in series (1-4)"),
+    ("pure_martingale",           "Догон 2-й по сигналу (True/False)",    "Chase 2nd by signal (True/False)"),
+    ("manual_signal_pause_sec",   "Пауза после сигнала (сек)",            "Pause after signal (sec)"),
 
-    # ==================== Payout OTC ====================
+    # ==================== Payout ====================
     ("payout_min_otc",            "Мин. payout OTC (%)",                  "Min OTC payout (%)"),
     ("payout_max_otc",            "Макс. payout OTC (%)",                 "Max OTC payout (%)"),
-
-    # ==================== Payout Real ====================
-    ("payout_min_real",           "Мин. payout Real (%)",                 "Min Real payout (%)"),
-    ("payout_max_real",           "Макс. payout Real (%)",                "Max Real payout (%)"),
-
-    # ==================== Общие payout ====================
     ("payout_recheck_sec",        "Перепроверка payout (сек)",            "Payout recheck (sec)"),
 
     # ==================== Real-пары ====================
     ("include_real",              "Включать Real-пары (True/False)",      "Include Real pairs (True/False)"),
-    ("real_asset_types",          "Типы Real (currency)",                 "Real types (currency)"),
-    ("timezone",                  "Часовой пояс (Europe/Moscow)",         "Timezone (Europe/Moscow)"),
-    ("forex_trade_days",          "Дни Forex (0=Пн..4=Пт)",               "Forex days (0=Mon..4=Fri)"),
 
     # ==================== Анализ 1м ====================
     ("min_confirmations",         "Мин. подтверждений сигнала",           "Min signal confirmations"),
@@ -2413,30 +2461,22 @@ MENU_FIELDS = [
     ("atr_period",                "ATR период",                           "ATR period"),
     ("atr_min_percent",           "ATR мин. волатильность (%)",           "ATR min volatility (%)"),
 
-    # ==================== Мульти-ТФ ====================
-    ("tf_3m_rsi_bull",            "3м RSI бычий порог",                   "3m RSI bullish threshold"),
-    ("tf_3m_rsi_bear",            "3м RSI медвежий порог",                "3m RSI bearish threshold"),
-    ("tf_3m_neutral_blocks",      "3м нейтральный блокирует (True/False)", "3m neutral blocks (True/False)"),
-    ("tf_10m_overbought",         "10м RSI перекуп",                      "10m RSI overbought"),
-    ("tf_10m_oversold",           "10м RSI перепрод",                     "10m RSI oversold"),
-
     # ==================== Пропуски ====================
     ("skip_before_change_plus",   "Пропусков после +серии",               "Skips after winning series"),
     ("skip_before_change_minus",  "Пропусков после -серии",               "Skips after losing series"),
 
     # ==================== Просадка ====================
     ("max_drawdown_percent",      "Макс. просадка (%)",                   "Max drawdown (%)"),
-    ("drawdown_pause_sec",        "Пауза при просадке (сек)",             "Drawdown pause (sec)"),
     ("drawdown_max_count",        "Макс. кол-во просадок",                "Max drawdown count"),
+    ("pause_after_losses",        "Пауза после N минусов",                "Pause after N losses"),
 
     # ==================== Новости ====================
     ("news_enabled",              "Пауза при новостях (True/False)",      "News pause enabled (True/False)"),
     ("news_importance_min",       "Мин. важность (2=Medium,3=High)",      "Min importance (2=Med, 3=High)"),
-    ("news_pre_pause_min",        "Пауза ДО новости (мин)",               "Pre-news pause (min)"),
-    ("news_post_pause_min",       "Пауза ПОСЛЕ новости (мин)",            "Post-news pause (min)"),
-    ("news_currencies",           "Валюты новостей (USD,EUR..)",          "News currencies (USD,EUR..)"),
-    ("news_refresh_hours",        "Обновление календаря (часы)",          "Calendar refresh (hours)"),
-    ("news_fallback_stop",        "СТОП если календарь не загружен",      "STOP if calendar not loaded"),
+
+    # ==================== Фильтр pair_stats ====================
+    ("pair_stats_enabled",        "Фильтр по pair_stats (True/False)",    "Filter by pair_stats (True/False)"),
+    ("pair_stats_min_winrate",    "Мин. Winrate пары (%)",                "Min pair Winrate (%)"),
 ]
 
 def _format_value(val) -> str:
