@@ -61,15 +61,16 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CHECKLIST_ALL
 # COLORS_FINAL
 # SERVER_FIX_V1
+# DEFAULT_CONFIG_SAFE
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
-    "fixed_steps": [1.0, 2.0, 4.0, 8.0],
-    "martingale_steps_count": 3,
-    "pure_martingale": True,
-    "martingale_enabled": True,
+    "fixed_steps": [1.0],
+    "martingale_steps_count": 1,
+    "pure_martingale": False,
+    "martingale_enabled": False,
     "payout_min": 85,
     "payout_max": 92,
     "payout_min_otc": 90,
@@ -77,7 +78,7 @@ DEFAULT_CONFIG = {
     "payout_min_real": 85,
     "payout_max_real": 92,
     "payout_recheck_sec": 600,
-    "include_real": True,
+    "include_real": False,
     "real_asset_types": ["currency"],
     "timezone": "Europe/Moscow",
     "forex_trade_days": [0, 1, 2, 3, 4],
@@ -97,7 +98,7 @@ DEFAULT_CONFIG = {
     "tf_10m_oversold": 25,
     "skip_before_change_plus": 3,
     "skip_before_change_minus": 2,
-    "max_drawdown_percent": 30,
+    "max_drawdown_percent": 15,
     "max_drawdown_percent_double": 50,
     "drawdown_pause_sec": 1800,
     "drawdown_max_count": 1,
@@ -113,8 +114,8 @@ DEFAULT_CONFIG = {
     "candle_start_max_sec": 8,
     "human_delay_sec": 0,
     "step3_pause_between_circles_sec": 30,
-    "wait_candle_start_enabled": True,
-    "wait_candle_start_step3_4": True,
+    "wait_candle_start_enabled": False,
+    "wait_candle_start_step3_4": False,
     "no_signal_pause_sec": 60,
     "manual_signal_pause_sec": 20,
     "double_martingale_enabled": False,
@@ -136,7 +137,7 @@ DEFAULT_CONFIG = {
     "bad_hours_max_winrate": 30.0,
     "check_interval_step4_sec": 45,
     "log_timezone_offset_hours": 3,
-    "pause_after_losses": 4,
+    "pause_after_losses": 2,
     "pause_after_losses_sec": 1800,
 }
 # /DEFAULT_CONFIG_V2
