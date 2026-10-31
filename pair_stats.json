@@ -1,0 +1,356 @@
+{
+  "GBPAUD_otc": {
+    "winrate": 49.86,
+    "wins": 3497,
+    "losses": 3517,
+    "total": 7014
+  },
+  "GBPUSD_otc": {
+    "winrate": 50.29,
+    "wins": 3262,
+    "losses": 3225,
+    "total": 6487
+  },
+  "IRRUSD_otc": {
+    "winrate": 50.2,
+    "wins": 3386,
+    "losses": 3359,
+    "total": 6745
+  },
+  "EURUSD_otc": {
+    "winrate": 49.69,
+    "wins": 3573,
+    "losses": 3617,
+    "total": 7190
+  },
+  "BHDCNY_otc": {
+    "winrate": 50.02,
+    "wins": 3406,
+    "losses": 3403,
+    "total": 6809
+  },
+  "EURNZD_otc": {
+    "winrate": 49.11,
+    "wins": 3153,
+    "losses": 3267,
+    "total": 6420
+  },
+  "USDTHB_otc": {
+    "winrate": 49.21,
+    "wins": 3308,
+    "losses": 3414,
+    "total": 6722
+  },
+  "EURHUF_otc": {
+    "winrate": 50.22,
+    "wins": 3390,
+    "losses": 3360,
+    "total": 6750
+  },
+  "KESUSD_otc": {
+    "winrate": 50.48,
+    "wins": 3296,
+    "losses": 3233,
+    "total": 6529
+  },
+  "JODCNY_otc": {
+    "winrate": 50.22,
+    "wins": 3390,
+    "losses": 3360,
+    "total": 6750
+  },
+  "USDDZD_otc": {
+    "winrate": 49.89,
+    "wins": 3476,
+    "losses": 3492,
+    "total": 6968
+  },
+  "CADJPY_otc": {
+    "winrate": 49.53,
+    "wins": 3367,
+    "losses": 3431,
+    "total": 6798
+  },
+  "OMRCNY_otc": {
+    "winrate": 49.87,
+    "wins": 3476,
+    "losses": 3494,
+    "total": 6970
+  },
+  "ZARUSD_otc": {
+    "winrate": 49.3,
+    "wins": 3168,
+    "losses": 3258,
+    "total": 6426
+  },
+  "TNDUSD_otc": {
+    "winrate": 49.6,
+    "wins": 3465,
+    "losses": 3521,
+    "total": 6986
+  },
+  "USDCAD_otc": {
+    "winrate": 49.81,
+    "wins": 3462,
+    "losses": 3489,
+    "total": 6951
+  },
+  "UAHUSD_otc": {
+    "winrate": 49.4,
+    "wins": 2864,
+    "losses": 2934,
+    "total": 5798
+  },
+  "USDPKR_otc": {
+    "winrate": 50.65,
+    "wins": 3289,
+    "losses": 3205,
+    "total": 6494
+  },
+  "NGNUSD_otc": {
+    "winrate": 50.57,
+    "wins": 3383,
+    "losses": 3307,
+    "total": 6690
+  },
+  "EURGBP_otc": {
+    "winrate": 49.89,
+    "wins": 3427,
+    "losses": 3442,
+    "total": 6869
+  },
+  "USDINR_otc": {
+    "winrate": 49.8,
+    "wins": 3283,
+    "losses": 3310,
+    "total": 6593
+  },
+  "AUDCHF_otc": {
+    "winrate": 50.46,
+    "wins": 3371,
+    "losses": 3310,
+    "total": 6681
+  },
+  "USDCLP_otc": {
+    "winrate": 50.35,
+    "wins": 3269,
+    "losses": 3223,
+    "total": 6492
+  },
+  "EURJPY_otc": {
+    "winrate": 49.05,
+    "wins": 3336,
+    "losses": 3465,
+    "total": 6801
+  },
+  "NZDUSD_otc": {
+    "winrate": 49.42,
+    "wins": 3216,
+    "losses": 3292,
+    "total": 6508
+  },
+  "AUDUSD_otc": {
+    "winrate": 51.18,
+    "wins": 3418,
+    "losses": 3260,
+    "total": 6678
+  },
+  "USDJPY_otc": {
+    "winrate": 50.21,
+    "wins": 3365,
+    "losses": 3337,
+    "total": 6702
+  },
+  "GBPJPY_otc": {
+    "winrate": 50.79,
+    "wins": 3419,
+    "losses": 3312,
+    "total": 6731
+  },
+  "USDPHP_otc": {
+    "winrate": 49.55,
+    "wins": 3336,
+    "losses": 3397,
+    "total": 6733
+  },
+  "USDBDT_otc": {
+    "winrate": 49.86,
+    "wins": 3645,
+    "losses": 3665,
+    "total": 7310
+  },
+  "YERUSD_otc": {
+    "winrate": 50.29,
+    "wins": 3341,
+    "losses": 3303,
+    "total": 6644
+  },
+  "USDVND_otc": {
+    "winrate": 50.2,
+    "wins": 3264,
+    "losses": 3238,
+    "total": 6502
+  },
+  "USDRUB_otc": {
+    "winrate": 49.34,
+    "wins": 3151,
+    "losses": 3235,
+    "total": 6386
+  },
+  "AUDNZD_otc": {
+    "winrate": 48.38,
+    "wins": 3150,
+    "losses": 3361,
+    "total": 6511
+  },
+  "CHFNOK_otc": {
+    "winrate": 49.46,
+    "wins": 3424,
+    "losses": 3499,
+    "total": 6923
+  },
+  "AUDCAD_otc": {
+    "winrate": 49.93,
+    "wins": 3382,
+    "losses": 3392,
+    "total": 6774
+  },
+  "EURCHF_otc": {
+    "winrate": 48.99,
+    "wins": 3427,
+    "losses": 3569,
+    "total": 6996
+  },
+  "USDCOP_otc": {
+    "winrate": 50.15,
+    "wins": 3391,
+    "losses": 3371,
+    "total": 6762
+  },
+  "USDCNH_otc": {
+    "winrate": 50.16,
+    "wins": 3463,
+    "losses": 3441,
+    "total": 6904
+  },
+  "USDMXN_otc": {
+    "winrate": 50.06,
+    "wins": 3113,
+    "losses": 3105,
+    "total": 6218
+  },
+  "CADCHF_otc": {
+    "winrate": 51.11,
+    "wins": 3480,
+    "losses": 3329,
+    "total": 6809
+  },
+  "USDBRL_otc": {
+    "winrate": 50.85,
+    "wins": 3295,
+    "losses": 3185,
+    "total": 6480
+  },
+  "USDMYR_otc": {
+    "winrate": 49.64,
+    "wins": 3620,
+    "losses": 3673,
+    "total": 7293
+  },
+  "EURRUB_otc": {
+    "winrate": 50.74,
+    "wins": 3577,
+    "losses": 3472,
+    "total": 7049
+  },
+  "EURTRY_otc": {
+    "winrate": 49.13,
+    "wins": 2589,
+    "losses": 2681,
+    "total": 5270
+  },
+  "MADUSD_otc": {
+    "winrate": 50.24,
+    "wins": 3410,
+    "losses": 3377,
+    "total": 6787
+  },
+  "NZDJPY_otc": {
+    "winrate": 49.59,
+    "wins": 3599,
+    "losses": 3658,
+    "total": 7257
+  },
+  "USDIDR_otc": {
+    "winrate": 50.33,
+    "wins": 3523,
+    "losses": 3477,
+    "total": 7000
+  },
+  "QARCNY_otc": {
+    "winrate": 51.29,
+    "wins": 3330,
+    "losses": 3163,
+    "total": 6493
+  },
+  "LBPUSD_otc": {
+    "winrate": 50.74,
+    "wins": 3541,
+    "losses": 3438,
+    "total": 6979
+  },
+  "AUDJPY_otc": {
+    "winrate": 49.68,
+    "wins": 3269,
+    "losses": 3311,
+    "total": 6580
+  },
+  "USDEGP_otc": {
+    "winrate": 49.98,
+    "wins": 3257,
+    "losses": 3260,
+    "total": 6517
+  },
+  "USDSGD_otc": {
+    "winrate": 51.29,
+    "wins": 3216,
+    "losses": 3054,
+    "total": 6270
+  },
+  "USDCHF_otc": {
+    "winrate": 50.45,
+    "wins": 3566,
+    "losses": 3502,
+    "total": 7068
+  },
+  "AEDCNY_otc": {
+    "winrate": 50.24,
+    "wins": 3507,
+    "losses": 3473,
+    "total": 6980
+  },
+  "CHFJPY_otc": {
+    "winrate": 50.1,
+    "wins": 3389,
+    "losses": 3376,
+    "total": 6765
+  },
+  "SYPUSD_otc": {
+    "winrate": 50.42,
+    "wins": 3570,
+    "losses": 3511,
+    "total": 7081
+  },
+  "SARCNY_otc": {
+    "winrate": 49.66,
+    "wins": 3314,
+    "losses": 3360,
+    "total": 6674
+  },
+  "USDARS_otc": {
+    "winrate": 51.08,
+    "wins": 3696,
+    "losses": 3540,
+    "total": 7236
+  }
+}

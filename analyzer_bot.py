@@ -114,7 +114,7 @@ DEFAULT_CONFIG = {
     "news_currencies": ["USD", "EUR", "GBP", "JPY"],
     "news_refresh_hours": 4,
     "news_fallback_stop": True,
-    "max_runtime_hours": 24,
+    "max_runtime_hours": 168,
     "max_error_streak": 5,
     "candle_start_max_sec": 8,
     "human_delay_sec": 0,
