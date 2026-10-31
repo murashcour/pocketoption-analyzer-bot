@@ -66,6 +66,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # PAIR_STATS_FILTER
 # CLEAN_MENU
 # NEW_FEATURES
+# BAD_PAIRS_FIX
+# BAD_PAIRS_FIX2
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -872,8 +874,11 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                 return None, None, None
         else:
             # Не ждём — пересчитываем full_analysis для свежей entry
-            new_sig, new_entry, _ = await full_analysis(client, pair)
+            new_sig, new_entry, reason = await full_analysis(client, pair)
             if new_sig is None:
+                # BAD_PAIRS_FIX2: mark_bad_pair при NO_DATA
+                if reason == "NO_DATA" and state is not None:
+                    state.mark_bad_pair(pair, minutes=10)
                 logger.info(f"   ⏸ 1-я: сигнал пропал на {pair} — смена пары")
                 if state is not None:
                     state.change_pair("1-я: сигнал пропал")
@@ -1037,8 +1042,11 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
             last_log_time = time.time()
 
         # Анализ
-        new_signal, new_entry, _ = await full_analysis(client, pair)
+        new_signal, new_entry, reason = await full_analysis(client, pair)
         if new_signal is None:
+            # BAD_PAIRS_FIX: mark_bad_pair при NO_DATA
+            if reason == "NO_DATA" and state is not None:
+                state.mark_bad_pair(pair, minutes=10)
             logger.info(f"   ⏸ 2-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
                 _old_pair = pair
@@ -1117,8 +1125,11 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
             )
             last_log_time = time.time()
 
-        new_signal, new_entry, _ = await full_analysis(client, pair)
+        new_signal, new_entry, reason = await full_analysis(client, pair)
         if new_signal is None:
+            # BAD_PAIRS_FIX: mark_bad_pair при NO_DATA
+            if reason == "NO_DATA" and state is not None:
+                state.mark_bad_pair(pair, minutes=10)
             logger.info(f"   ⏸ 3-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
                 _old_pair = pair
@@ -1206,8 +1217,11 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
             )
             last_log_time = time.time()
 
-        new_signal, new_entry, _ = await full_analysis(client, pair)
+        new_signal, new_entry, reason = await full_analysis(client, pair)
         if new_signal is None:
+            # BAD_PAIRS_FIX: mark_bad_pair при NO_DATA
+            if reason == "NO_DATA" and state is not None:
+                state.mark_bad_pair(pair, minutes=10)
             logger.info(f"   ⏸ 4-я (анализ): нет сигнала на {pair} — смена пары")
             if state is not None:
                 _old_pair = pair
