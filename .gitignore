@@ -57,3 +57,6 @@ desktop.ini
 *.kate-swp
 analyzer_bot.py.bak*
 patch_*.py
+history/
+pair_stats.json
+analyzer_bot.log
