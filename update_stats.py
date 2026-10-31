@@ -16,6 +16,42 @@ def analyze_csv(filepath: Path):
             rows = list(reader)
             if len(rows) < 10:
                 return 0, 0
+            
+            # NEW_FEATURES: фильтрация по history_window_hours
+            import json
+            import os
+            from datetime import datetime, timedelta
+            
+            cfg_path = Path("config.json")
+            window_hours = 24
+            if cfg_path.exists():
+                try:
+                    with open(cfg_path, 'r', encoding='utf-8') as cf:
+                        cfg = json.load(cf)
+                    window_hours = cfg.get("history_window_hours", 24)
+                except Exception:
+                    pass
+            
+            cutoff = datetime.utcnow() - timedelta(hours=window_hours)
+            
+            filtered_rows = []
+            for row in rows:
+                try:
+                    ts = row.get('timestamp', '')
+                    if ts:
+                        # Пытаемся распарсить timestamp
+                        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                        if dt.replace(tzinfo=None) >= cutoff:
+                            filtered_rows.append(row)
+                    else:
+                        filtered_rows.append(row)  # если нет timestamp — берём
+                except Exception:
+                    filtered_rows.append(row)  # если не парсится — берём
+            
+            rows = filtered_rows
+            if len(rows) < 10:
+                return 0, 0
+            
             for i in range(len(rows) - 1):
                 try:
                     curr_close = float(rows[i]['close'])

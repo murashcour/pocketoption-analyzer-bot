@@ -65,6 +65,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # ENTRY_PAUSE
 # PAIR_STATS_FILTER
 # CLEAN_MENU
+# NEW_FEATURES
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -93,6 +94,7 @@ DEFAULT_CONFIG = {
     "sr_lookback": 50,
     "sr_proximity_percent": 0.5,
     "pair_stats_enabled": True,
+    "history_window_hours": 24,
     "pair_stats_min_winrate": 50.0,
     "atr_period": 14,
     "atr_min_percent": 0.015,
@@ -1727,6 +1729,18 @@ def _filter_pairs_by_stats(pairs: list, min_winrate: float = 55.0):
     if not good:
         return pairs
     filtered = [p for p in pairs if p in good]
+    
+    # NEW_FEATURES: Fallback — если < 3 пар, берём топ-5 по Winrate
+    if len(filtered) < 3:
+        logger.warning(f"⚠ После фильтра осталось {len(filtered)} пар — берём топ-5 по Winrate")
+        # Сортируем все пары по Winrate (даже если ниже порога)
+        all_stats = _load_pair_stats(0.0)  # все пары
+        sorted_by_wr = sorted(all_stats.items(), key=lambda x: x[1], reverse=True)
+        fallback = [p for p, wr in sorted_by_wr[:5] if p in pairs]
+        if fallback:
+            logger.info(f"🔄 Fallback: {fallback}")
+            return fallback
+    
     if not filtered:
         logger.warning("⚠ Фильтр отсёк все пары — откат к полному списку")
         return pairs
@@ -2477,6 +2491,7 @@ MENU_FIELDS = [
     # ==================== Фильтр pair_stats ====================
     ("pair_stats_enabled",        "Фильтр по pair_stats (True/False)",    "Filter by pair_stats (True/False)"),
     ("pair_stats_min_winrate",    "Мин. Winrate пары (%)",                "Min pair Winrate (%)"),
+    ("history_window_hours",      "Окно истории (часов)",                 "History window (hours)"),
 ]
 
 def _format_value(val) -> str:
