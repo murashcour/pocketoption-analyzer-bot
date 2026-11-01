@@ -68,6 +68,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # NEW_FEATURES
 # BAD_PAIRS_FIX
 # BAD_PAIRS_FIX2
+# FIX_SESSION
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -97,7 +98,7 @@ DEFAULT_CONFIG = {
     "sr_proximity_percent": 0.5,
     "pair_stats_enabled": True,
     "history_window_hours": 24,
-    "pair_stats_min_winrate": 50.0,
+    "pair_stats_min_winrate": 49.0,
     "atr_period": 14,
     "atr_min_percent": 0.015,
     "tf_3m_rsi_bull": 54,
@@ -423,8 +424,20 @@ def analyze_1m(candles: List) -> Optional[str]:
     if bear >= mc and bear > bull and bear < total:
         logger.info(f"   [1м] PUT | {bear}/{total}")
         return "PUT"
-    # CHECKLIST_ALL: Убрали сигналы "5/5 (все!)", так как они часто ловят перегрев/разворот
-    # Оставляем только сигналы, где есть хотя бы одно противоречие (4/5 или 3/5)
+    # FIX_SESSION: вернули 5/5, но с проверкой RSI (не перекуп/перепрод)
+    if bull == total and bull >= mc:
+        # Проверка RSI: если перекуп/перепрод — блокируем
+        if r14 is not None and (r14 > CFG["rsi_overbought"] or r14 < CFG["rsi_oversold"]):
+            logger.info(f"   [1м] CALL | {bull}/{total} (все!) — RSI в крайней зоне ({r14:.1f}), пропуск")
+            return None
+        logger.info(f"   [1м] CALL | {bull}/{total} (все!)")
+        return "CALL"
+    if bear == total and bear >= mc:
+        if r14 is not None and (r14 > CFG["rsi_overbought"] or r14 < CFG["rsi_oversold"]):
+            logger.info(f"   [1м] PUT | {bear}/{total} (все!) — RSI в крайней зоне ({r14:.1f}), пропуск")
+            return None
+        logger.info(f"   [1м] PUT | {bear}/{total} (все!)")
+        return "PUT"
 
     logger.info(f"   [1м] Нет ({bull}/{bear})")
     return None
@@ -565,8 +578,9 @@ async def full_analysis(client, pair: str):
             trend_5 = "CALL" if e20_5 > e50_5 else "PUT"
             logger.info(f"   [5м тренд] {trend_5} (EMA20 vs EMA50)")
             if trend_5 != sig_1m:
-                logger.info(f"   [5м тренд] конфликт с 1м ({sig_1m}) — пропуск")
-                return None, None, "CONFLICT_5M_TREND"
+                # FIX_SESSION: не блокируем, а помечаем WEAK_SIGNAL
+                logger.info(f"   [5м тренд] конфликт с 1м ({sig_1m}) — WEAK_SIGNAL (продолжаем)")
+                # return None, None, "CONFLICT_5M_TREND"  # Закомментировано
     else:
         logger.info(f"   [{pair}] 5м мало данных (тренд не проверен)")
 
@@ -749,7 +763,7 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
         live_payout = await check_payout(client, p)
         pmin, pmax = get_payout_range(p)
         if live_payout is None or live_payout < pmin or live_payout > pmax:
-            logger.warning(f"   ⚠ Payout изменился перед открытием: {live_payout}% вне [{pmin}, {pmax}]%. Отмена сделки.")
+            logger.warning(f"   ⚠ FIX_SESSION: Payout изменился перед открытием: {live_payout}% вне [{pmin}, {pmax}]%. Отмена сделки.")
             return None
             
         # CHECKLIST_ALL: Проверка на payout 0% (хотя бы минимальный порог)
