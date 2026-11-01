@@ -82,6 +82,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FINAL_AVERAGING
 # FAST_PRICE
 # PRICE_FINAL
+# STEP_COMPARE
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1524,27 +1525,23 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             for i, d in enumerate(deals):
                 logger.info(f"   [CHECK] deal#{i+1} entry={d['entry']:.5f} ({signal})")
             
-            # FINAL_AVERAGING: проверяем все сделки с порогом шума
+            # STEP_COMPARE: сравниваем текущую цену только с ПОСЛЕДНЕЙ сделкой
             threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
-            all_in_loss = True
+            last_deal = deals[-1]
+            entry = last_deal["entry"]
             
-            # Если цены нет, мы уже вышли через continue
-            for d in deals:
-                    if signal == "CALL":
-                        loss_pct = (d["entry"] - current_price) / d["entry"]
-                    else:
-                        loss_pct = (current_price - d["entry"]) / d["entry"]
-                    
-                    logger.info(f"   [CHECK] deal entry={d['entry']:.5f} loss={loss_pct*100:+.2f}% (порог {threshold_pct*100:.2f}%)")
-                    
-                    # Если сделка в плюсе или убыток меньше порога — не усредняем
-                    if loss_pct < threshold_pct:
-                        all_in_loss = False
-                        break
-            if not all_in_loss:
-                logger.info(f"   ✅ Хотя бы одна в плюсе — стоп (шаг {step+1})")
+            if signal == "CALL":
+                loss_pct = (entry - current_price) / entry
+            else:
+                loss_pct = (current_price - entry) / entry
+            
+            logger.info(f"   [CHECK] step={len(deals)+1}/{max_steps} | last_entry={entry:.5f} | current={current_price:.5f} | loss={loss_pct*100:+.2f}% (порог {threshold_pct*100:.2f}%)")
+            
+            if loss_pct > threshold_pct:
+                logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {len(deals)+2}-ю")
+            else:
+                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — не усредняю")
                 break
-            logger.info(f"   ❌ Все в минусе — открываю {step+2}-ю")
 
     # Ждём закрытия последней сделки
     if deals:
