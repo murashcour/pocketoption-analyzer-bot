@@ -91,6 +91,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FINAL_FIX
 # REVERT_STEPS
 # TIMING_AND_BREAK
+# SIMPLE_AVERAGING
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1493,8 +1494,11 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
 async def run_averaging_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
-    AVERAGING: усреднение без мартингейла.
-    1-я: $1. Через 15 сек: если в минусе — 2-я $1. И т.д. до 4-х.
+    SIMPLE_AVERAGING: простая логика (как в мартингейле).
+    1. Открываем 1-ю.
+    2. Ждем 15 сек. Если в минусе — открываем 2-ю.
+    3. Ждем 15 сек. Если в минусе — открываем 3-ю.
+    4. Ждем 15 сек. Если в минусе — открываем 4-ю.
     """
     try:
         B_start = await _safe_get_balance(client)
@@ -1503,61 +1507,60 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         return False
 
     bet = 1.0
-    max_steps = CFG.get("averaging_max_steps", 4)
     step_sec = CFG.get("averaging_step_sec", 15)
-    direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
+    max_steps = CFG.get("averaging_max_steps", 4)
+    threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
+    direction_str = "ВВЕРХ ⬆ (CALL)" if signal == "CALL" else "ВНИЗ ⬇ (PUT)"
 
     logger.info(f"\n🎬 УСРЕДНЕНИЕ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
     logger.info(f"   Ставка: ${bet:.2f} × {max_steps} (макс риск ${bet*max_steps:.2f})")
 
     deals = []
-    for step in range(max_steps):
+    
+    # 1. Открываем 1-ю сделку
+    deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
+    if deal is None:
+        logger.warning("   ⚠ Не удалось открыть 1-ю — стоп")
+        return False
+    deals.append(deal)
+    logger.info(f"   📈 [1/{max_steps}] Открыл ${bet:.2f} {direction_str}")
+
+    # 2. Последовательно проверяем и открываем догоны
+    for step in range(1, max_steps):
         if stopper.requested():
-            logger.warning("⏹ Остановка во время усреднения")
             break
 
-        # Открываем сделку (всегда передаем entry_price — цену 1-й сделки)
-        deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
-        
-        if deal is None:
+        # Ждем 15 секунд
+        await stopper.sleep(step_sec)
+
+        # Получаем цену
+        current_price = await get_current_price_from_forming_candle(client, pair)
+        if current_price is None:
+            logger.warning(f"   ⚠ Цена не получена — пропускаю шаг {step+1}")
+            continue
+
+        # Сравниваем с ценой ПЕРВОЙ сделки (как в мартингейле)
+        entry = deals[0]["entry"]
+        if signal == "CALL":
+            loss_pct = (entry - current_price) / entry
+        else:
+            loss_pct = (current_price - entry) / entry
+
+        logger.info(f"   [CHECK] step={step+1}/{max_steps} | entry={entry:.5f} | current={current_price:.5f} | loss={loss_pct*100:+.2f}%")
+
+        # Если в плюсе (loss < threshold) — выходим
+        if loss_pct <= threshold_pct:
+            logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — выходим")
+            break
+
+        # Если в минусе — открываем следующую
+        logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {step+1}-ю")
+        new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
+        if new_deal is None:
             logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
             break
-        deals.append(deal)
+        deals.append(new_deal)
         logger.info(f"   📈 [{step+1}/{max_steps}] Открыл ${bet:.2f} {direction_str}")
-
-        # Если это не последняя ступень — ждём 15 сек и проверяем
-        if step < max_steps - 1:
-            await stopper.sleep(step_sec)
-            current_price = await get_current_price_from_forming_candle(client, pair)
-            if current_price is None:
-                logger.warning("   ⚠ Цена не получена — пропускаю догон (жду следующий шаг)")
-                # Пропускаем открытие, ждем следующей проверки через 15 сек
-                continue
-            # AVERAGING_CHECK: логируем current_price и entry
-            logger.info(f"   [CHECK] current_price={current_price:.5f}")
-            for i, d in enumerate(deals):
-                logger.info(f"   [CHECK] deal#{i+1} entry={d['entry']:.5f} ({signal})")
-            
-            # CORRECT_LOGIC: сравниваем с последней сделкой (правильные знаки)
-            threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
-            last_deal = deals[-1]
-            entry = last_deal["entry"]
-            
-            if signal == "CALL":
-                loss_pct = (entry - current_price) / entry  # ниже входа = минус
-            else:  # PUT
-                loss_pct = (current_price - entry) / entry  # выше входа = минус
-            
-            logger.info(f"   [CHECK] step={len(deals)+1}/{max_steps} | last_entry={entry:.5f} | current={current_price:.5f} | loss={loss_pct*100:+.2f}% (порог {threshold_pct*100:.2f}%)")
-            
-            if loss_pct > threshold_pct:
-                logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {len(deals)+2}-ю")
-                # Идем к открытию (цикл продолжается)
-            else:
-                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ следующего шага (не открываю)")
-                # НЕ выходим из цикла, а просто ждем и идем на следующую итерацию
-                await stopper.sleep(step_sec)
-                continue  # Ждем следующей проверки через 10 сек
 
     # Ждём закрытия последней сделки
     if deals:
@@ -1578,7 +1581,6 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
     else:
         logger.info(f"❌ УСРЕДНЕНИЕ МИНУС (Δ {delta:+.2f})")
         return False
-
 
 async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
