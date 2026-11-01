@@ -76,6 +76,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # AVERAGING\n# REAL_PAIRS
 # WINDOW_48
 # FORMING_PRICE_FIX
+# AVERAGING_CHECK
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1508,6 +1509,11 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             if current_price is None:
                 logger.warning("   ⚠ Цена не получена — стоп")
                 break
+            # AVERAGING_CHECK: логируем current_price и entry
+            logger.info(f"   [CHECK] current_price={current_price:.5f}")
+            for i, d in enumerate(deals):
+                logger.info(f"   [CHECK] deal#{i+1} entry={d['entry']:.5f} ({signal})")
+            
             # Проверяем, в минусе ли ВСЕ открытые сделки
             all_in_loss = True
             for d in deals:
