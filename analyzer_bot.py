@@ -70,6 +70,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # BAD_PAIRS_FIX2
 # FIX_SESSION
 # PAYOUT_FIX
+# ADX_VWAP
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -96,6 +97,9 @@ DEFAULT_CONFIG = {
     "rsi_bull_min": 53,
     "rsi_bear_max": 47,
     "sr_lookback": 50,
+    "adx_filter_enabled": False,
+    "adx_min": 20.0,
+    "vwap_filter_enabled": False,
     "sr_proximity_percent": 0.5,
     "pair_stats_enabled": True,
     "history_window_hours": 24,
@@ -534,6 +538,33 @@ def check_volatility(candles: List, price: float) -> Tuple[bool, str]:
 # ==================== ПОЛНЫЙ АНАЛИЗ ====================
 # ==================== FULL ANALYSIS ====================
 
+
+# ADX_VWAP: дневной VWAP (средняя цена, взвешенная по объёму)
+def calc_vwap(candles: List) -> Optional[float]:
+    """Считает VWAP по переданным свечам (обычно 1м за день)."""
+    if not candles:
+        return None
+    total_pv = 0.0
+    total_v = 0.0
+    for c in candles:
+        h = get_high(c)
+        l = get_low(c)
+        cl = get_close(c)
+        v = 0
+        try:
+            v = float(c.get("volume", 0)) if isinstance(c, dict) else 0
+        except Exception:
+            v = 0
+        if v <= 0:
+            v = 1.0  # если объёма нет — считаем как 1
+        tp = (h + l + cl) / 3.0
+        total_pv += tp * v
+        total_v += v
+    if total_v <= 0:
+        return None
+    return total_pv / total_v
+
+
 async def full_analysis(client, pair: str):
     """Мульти-ТФ анализ: 1м + 5м + 15м + S/R + ATR. Возвращает (signal, price)."""
     # ===== БЫСТРАЯ ПРОВЕРКА: ТОЛЬКО 1м =====
@@ -568,7 +599,26 @@ async def full_analysis(client, pair: str):
         logger.info(f"   [{pair}] S/R блокирует сделку")
         return None, None, "SR"
 
-    # SERVER_FIX: ADX убран (перегруз фильтрами, PDF)
+    # ADX_VWAP: ADX фильтр (мягкий)
+    if CFG.get("adx_filter_enabled", False):
+        adx_val = adx(c1, 14)
+        if adx_val is not None:
+            logger.info(f"   [ADX] {adx_val:.1f} (порог {CFG.get('adx_min', 20.0)})")
+            if adx_val < CFG.get("adx_min", 20.0):
+                logger.info(f"   [ADX] флэт (< {CFG.get('adx_min', 20.0)}) — пропуск")
+                return None, None, "ADX_FLAT"
+
+    # ADX_VWAP: VWAP фильтр
+    if CFG.get("vwap_filter_enabled", False):
+        vwap_val = calc_vwap(c1)
+        if vwap_val is not None:
+            logger.info(f"   [VWAP] {vwap_val:.5f} | цена {price:.5f}")
+            if price > vwap_val and sig_1m == "PUT":
+                logger.info(f"   [VWAP] цена выше VWAP — блокирую PUT")
+                return None, None, "VWAP_CONFLICT"
+            if price < vwap_val and sig_1m == "CALL":
+                logger.info(f"   [VWAP] цена ниже VWAP — блокирую CALL")
+                return None, None, "VWAP_CONFLICT"
 
     # TREND_5M: 5м тренд (EMA20 vs EMA50)
     if c5 and len(c5) >= 30:
@@ -2557,6 +2607,9 @@ MENU_FIELDS = [
     ("pair_stats_enabled",        "Фильтр по pair_stats (True/False)",    "Filter by pair_stats (True/False)"),
     ("pair_stats_min_winrate",    "Мин. Winrate пары (%)",                "Min pair Winrate (%)"),
     ("history_window_hours",      "Окно истории (часов)",                 "History window (hours)"),
+    ("adx_filter_enabled",        "ADX фильтр (True/False)",              "ADX filter enabled (True/False)"),
+    ("adx_min",                   "ADX мин. порог",                       "ADX min threshold"),
+    ("vwap_filter_enabled",       "VWAP фильтр (True/False)",             "VWAP filter enabled (True/False)"),
 ]
 
 def _format_value(val) -> str:
