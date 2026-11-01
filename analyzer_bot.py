@@ -341,6 +341,20 @@ async def fetch_candles(client, asset: str, period: int, count: int) -> List:
     return []
 
 
+async def _safe_get_balance(client, max_retries=3, delay=5):
+    """SAFE_BALANCE: безопасный запрос баланса (защита от бага API $-1.00)."""
+    for attempt in range(max_retries):
+        try:
+            bal = await client.balance()
+            if bal is not None and float(bal) > 0:
+                return float(bal)
+            logger.warning(f"   ⚠ Баланс вернул {bal} (попытка {attempt+1}/{max_retries}) — ждём {delay} сек")
+        except Exception as e:
+            logger.warning(f"   ⚠ Ошибка баланса: {e} (попытка {attempt+1}/{max_retries})")
+        await asyncio.sleep(delay)
+    raise ConnectionError(f"Не удалось получить баланс после {max_retries} попыток")
+
+
 async def get_current_price(client, pair: str) -> Optional[float]:
     """Цена закрытия текущей свечи через get_candles_live."""
     try:
