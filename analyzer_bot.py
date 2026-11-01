@@ -88,6 +88,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FINAL_BREAK
 # CORRECT_LOGIC
 # ENTRY_PRICE_V2
+# FINAL_FIX
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -900,7 +901,7 @@ async def get_current_price_from_forming_candle(client, pair):
 
     # 2. Пробуем тикер (get_current_price, без задержки)
     try:
-        price = await asyncio.wait_for(get_current_price(client, pair), timeout=2.0)
+        price = await asyncio.wait_for(get_current_price(client, pair), timeout=1.5)
         if price is not None:
             return price
     except Exception as e:
@@ -1554,9 +1555,8 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
                 logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {len(deals)+2}-ю")
                 # Идем к открытию
             else:
-                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ (не открываю)")
-                await stopper.sleep(step_sec)
-                continue  # Пропускаем открытие
+                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — СТОП (не открываю)")
+                break  # <--- ВЫХОДИМ из цикла, а не ждем следующего шага
 
     # Ждём закрытия последней сделки
     if deals:
