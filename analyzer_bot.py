@@ -92,6 +92,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # REVERT_STEPS
 # TIMING_AND_BREAK
 # SIMPLE_AVERAGING
+# TRUE_AVERAGING
+# STEP_10
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1494,11 +1496,7 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
 async def run_averaging_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
-    SIMPLE_AVERAGING: простая логика (как в мартингейле).
-    1. Открываем 1-ю.
-    2. Ждем 15 сек. Если в минусе — открываем 2-ю.
-    3. Ждем 15 сек. Если в минусе — открываем 3-ю.
-    4. Ждем 15 сек. Если в минусе — открываем 4-ю.
+    TRUE_AVERAGING: сравниваем с ПОСЛЕДНЕЙ сделкой. Если в плюсе — ждем (не выходим).
     """
     try:
         B_start = await _safe_get_balance(client)
@@ -1507,7 +1505,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         return False
 
     bet = 1.0
-    step_sec = CFG.get("averaging_step_sec", 15)
+    step_sec = CFG.get("averaging_step_sec", 10)
     max_steps = CFG.get("averaging_max_steps", 4)
     threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
     direction_str = "ВВЕРХ ⬆ (CALL)" if signal == "CALL" else "ВНИЗ ⬇ (PUT)"
@@ -1525,7 +1523,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
     deals.append(deal)
     logger.info(f"   📈 [1/{max_steps}] Открыл ${bet:.2f} {direction_str}")
 
-    # 2. Последовательно проверяем и открываем догоны
+    # 2. Цикл шагов (строго 4 шага)
     for step in range(1, max_steps):
         if stopper.requested():
             break
@@ -1539,19 +1537,21 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             logger.warning(f"   ⚠ Цена не получена — пропускаю шаг {step+1}")
             continue
 
-        # Сравниваем с ценой ПЕРВОЙ сделки (как в мартингейле)
-        entry = deals[0]["entry"]
+        # Сравниваем с ценой ПОСЛЕДНЕЙ сделки
+        last_entry = deals[-1]["entry"]
+        
+        # Для CALL: цена ниже входа — минус. Для PUT: цена выше входа — минус.
         if signal == "CALL":
-            loss_pct = (entry - current_price) / entry
+            loss_pct = (last_entry - current_price) / last_entry
         else:
-            loss_pct = (current_price - entry) / entry
+            loss_pct = (current_price - last_entry) / last_entry
 
-        logger.info(f"   [CHECK] step={step+1}/{max_steps} | entry={entry:.5f} | current={current_price:.5f} | loss={loss_pct*100:+.2f}%")
+        logger.info(f"   [CHECK] step={step+1}/{max_steps} | last_entry={last_entry:.5f} | current={current_price:.5f} | loss={loss_pct*100:+.2f}%")
 
-        # Если в плюсе (loss < threshold) — выходим
+        # Если в плюсе (loss < threshold) — НЕ ВЫХОДИМ, а просто ждем следующего шага
         if loss_pct <= threshold_pct:
-            logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — выходим")
-            break
+            logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ следующего шага (не открываю)")
+            continue  # Ждем следующего шага (цикл идет дальше)
 
         # Если в минусе — открываем следующую
         logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {step+1}-ю")
