@@ -86,6 +86,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # LOOP_CHECK
 # PRICE_TICKER_FIRST
 # FINAL_BREAK
+# CORRECT_LOGIC
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1532,25 +1533,25 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             for i, d in enumerate(deals):
                 logger.info(f"   [CHECK] deal#{i+1} entry={d['entry']:.5f} ({signal})")
             
-            # STEP_COMPARE: сравниваем текущую цену только с ПОСЛЕДНЕЙ сделкой
+            # CORRECT_LOGIC: сравниваем с последней сделкой (правильные знаки)
             threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
             last_deal = deals[-1]
             entry = last_deal["entry"]
             
             if signal == "CALL":
-                loss_pct = (entry - current_price) / entry
-            else:
-                loss_pct = (current_price - entry) / entry
+                loss_pct = (entry - current_price) / entry  # ниже входа = минус
+            else:  # PUT
+                loss_pct = (current_price - entry) / entry  # выше входа = минус
             
             logger.info(f"   [CHECK] step={len(deals)+1}/{max_steps} | last_entry={entry:.5f} | current={current_price:.5f} | loss={loss_pct*100:+.2f}% (порог {threshold_pct*100:.2f}%)")
             
             if loss_pct > threshold_pct:
                 logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {len(deals)+2}-ю")
-                # Идем дальше к открытию сделки
+                # Идем к открытию
             else:
-                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ следующего шага (не открываю)")
-                await stopper.sleep(step_sec) # Ждем следующий шаг
-                continue  # <--- ВОТ ГЛАВНОЕ: пропускаем открытие, идем на следующую итерацию
+                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ (не открываю)")
+                await stopper.sleep(step_sec)
+                continue  # Пропускаем открытие
 
     # Ждём закрытия последней сделки
     if deals:
