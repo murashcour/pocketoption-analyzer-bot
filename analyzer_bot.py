@@ -79,6 +79,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # AVERAGING_CHECK
 # FORMING_PRICE_STRICT
 # CHECK_30S_FIX
+# FINAL_AVERAGING
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -89,6 +90,7 @@ DEFAULT_CONFIG = {
     "averaging_enabled": False,
     "averaging_step_sec": 15,
     "averaging_max_steps": 4,
+    "averaging_threshold_pct": 0.02,  # % от цены (0.02% = 2-3 пипса)
     "pure_martingale": False,
     "martingale_enabled": False,
     "payout_min": 85,
@@ -871,32 +873,34 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 # AVERAGING: цена из формирующейся свечи (без задержки)
 async def get_current_price_from_forming_candle(client, pair):
-    """FORMING_PRICE_STRICT: получаем цену ТОЛЬКО из формирующейся свечи (без запаздывания)."""
-    # 1. Пытаемся получить именно ФОРМИРУЮЩУЮСЯ свечу
-    try:
-        gen = client.get_candles_live(pair, 60, 2)
-        async for closed, forming in gen:
-            # Проверяем, что нам вернули словарь с ценой закрытия (текущей)
-            if isinstance(forming, dict) and "close" in forming:
-                price = float(forming["close"])
-                logger.debug(f"   [PRICE] forming close={price:.5f}")
+    """FINAL_AVERAGING: получаем цену с 5 попытками (защита от таймаутов API)."""
+    # 1. Пытаемся получить ФОРМИРУЮЩУЮСЯ свечу (3 попытки)
+    for attempt in range(3):
+        try:
+            gen = client.get_candles_live(pair, 60, 2)
+            async for closed, forming in gen:
+                if isinstance(forming, dict) and "close" in forming:
+                    price = float(forming["close"])
+                    logger.debug(f"   [PRICE] forming close={price:.5f} (попытка {attempt+1})")
+                    return price
+                break
+        except Exception as e:
+            logger.debug(f"   get_candles_live error ({attempt+1}/3): {e}")
+        await asyncio.sleep(2)  # пауза 2 сек
+
+    # 2. Fallback: тикер (2 попытки)
+    for attempt in range(2):
+        try:
+            price = await get_current_price(client, pair)
+            if price is not None:
+                logger.debug(f"   [PRICE] ticker price={price:.5f} (попытка {attempt+1})")
                 return price
-            break
-    except Exception as e:
-        logger.debug(f"   get_candles_live error: {e}")
+        except Exception as e:
+            logger.debug(f"   get_current_price error ({attempt+1}/2): {e}")
+        await asyncio.sleep(2)
 
-    # 2. Fallback: получаем текущий тикер (spot price)
-    try:
-        price = await get_current_price(client, pair)
-        if price is not None:
-            logger.debug(f"   [PRICE] ticker price={price:.5f}")
-            return price
-    except Exception as e:
-        logger.debug(f"   get_current_price error: {e}")
-
-    logger.warning(f"   ⚠ FORMING_PRICE_STRICT: не удалось получить цену для {pair}")
+    logger.warning(f"   ⚠ FINAL_AVERAGING: не удалось получить цену для {pair} после 5 попыток")
     return None
-
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
     """
@@ -1511,17 +1515,22 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             for i, d in enumerate(deals):
                 logger.info(f"   [CHECK] deal#{i+1} entry={d['entry']:.5f} ({signal})")
             
-            # Проверяем, в минусе ли ВСЕ открытые сделки
+            # FINAL_AVERAGING: проверяем все сделки с порогом шума
+            threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
             all_in_loss = True
+            
             for d in deals:
                 if signal == "CALL":
-                    if current_price > d["entry"]:
-                        all_in_loss = False
-                        break
+                    loss_pct = (d["entry"] - current_price) / d["entry"]
                 else:
-                    if current_price < d["entry"]:
-                        all_in_loss = False
-                        break
+                    loss_pct = (current_price - d["entry"]) / d["entry"]
+                
+                logger.info(f"   [CHECK] deal entry={d['entry']:.5f} loss={loss_pct*100:+.2f}% (порог {threshold_pct*100:.2f}%)")
+                
+                # Если сделка в плюсе или убыток меньше порога — не усредняем
+                if loss_pct < threshold_pct:
+                    all_in_loss = False
+                    break
             if not all_in_loss:
                 logger.info(f"   ✅ Хотя бы одна в плюсе — стоп (шаг {step+1})")
                 break
