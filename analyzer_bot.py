@@ -72,6 +72,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # PAYOUT_FIX
 # ADX_VWAP
 # SQUEEZE_HYSTERESIS
+# HYSTERESIS
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -982,6 +983,14 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
         else:
             # Не ждём — пересчитываем full_analysis для свежей entry
             new_sig, new_entry, reason = await full_analysis(client, pair)
+            
+            # HYSTERESIS: если сигнал стал нейтральным, но раньше был CALL/PUT — не меняем
+            if new_sig is None and CFG.get("hysteresis_enabled", False):
+                if state is not None and state.last_signal is not None:
+                    new_sig = state.last_signal
+                    new_entry = entry_price
+                    logger.info(f"   [Гистерезис] сигнал нейтральный, оставляем {new_sig}")
+            
             if new_sig is None:
                 # BAD_PAIRS_FIX2: mark_bad_pair при NO_DATA
                 if reason == "NO_DATA" and state is not None:
@@ -1452,6 +1461,10 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     if deal_1 is None:
         logger.info(f"⏸ СЕРИЯ прервана: не удалось открыть 1-ю")
         return False
+    
+    # HYSTERESIS: запомнить сигнал
+    if state is not None:
+        state.last_signal = signal
 
     # ===== ШАГ 2: Ждём закрытия 1-й =====
     logger.info(f"⏳ Ждём закрытия 1-й ступени...")
@@ -1617,6 +1630,8 @@ class TraderState:
 
         self.last_series_won: Optional[bool] = None
         self.skip_limit: int = CFG["skip_before_change_minus"]
+        # HYSTERESIS: последний сигнал (CALL/PUT/None)
+        self.last_signal: Optional[str] = None
         # === BAD PAIRS / HOURS ===
         self.pair_stats = {}
         self.hour_stats = {}
