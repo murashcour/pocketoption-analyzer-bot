@@ -89,6 +89,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CORRECT_LOGIC
 # ENTRY_PRICE_V2
 # FINAL_FIX
+# REVERT_STEPS
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1514,11 +1515,8 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             logger.warning("⏹ Остановка во время усреднения")
             break
 
-        # Открываем сделку (для догонов передаем current_price)
-        if step == 0:
-            deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
-        else:
-            deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, current_price)
+        # Открываем сделку (всегда передаем entry_price — цену 1-й сделки)
+        deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
         
         if deal is None:
             logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
@@ -1555,8 +1553,9 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
                 logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {len(deals)+2}-ю")
                 # Идем к открытию
             else:
-                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — СТОП (не открываю)")
-                break  # <--- ВЫХОДИМ из цикла, а не ждем следующего шага
+                logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ следующего шага (не открываю)")
+                await stopper.sleep(step_sec)
+                continue  # Ждем следующей проверки через 15 сек
 
     # Ждём закрытия последней сделки
     if deals:
