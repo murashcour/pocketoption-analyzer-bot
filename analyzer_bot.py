@@ -90,6 +90,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # ENTRY_PRICE_V2
 # FINAL_FIX
 # REVERT_STEPS
+# TIMING_AND_BREAK
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -98,7 +99,7 @@ DEFAULT_CONFIG = {
     "fixed_steps": [1.0],
     "martingale_steps_count": 1,
     "averaging_enabled": False,
-    "averaging_step_sec": 15,
+    "averaging_step_sec": 10,  # TIMING_AND_BREAK: 10 сек + время на запрос = ~15 сек
     "averaging_max_steps": 4,
     "averaging_threshold_pct": 0.02,  # % от цены (0.02% = 2-3 пипса)
     "pure_martingale": False,
@@ -1551,11 +1552,12 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             
             if loss_pct > threshold_pct:
                 logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {len(deals)+2}-ю")
-                # Идем к открытию
+                # Идем к открытию (цикл продолжается)
             else:
                 logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ следующего шага (не открываю)")
+                # НЕ выходим из цикла, а просто ждем и идем на следующую итерацию
                 await stopper.sleep(step_sec)
-                continue  # Ждем следующей проверки через 15 сек
+                continue  # Ждем следующей проверки через 10 сек
 
     # Ждём закрытия последней сделки
     if deals:
