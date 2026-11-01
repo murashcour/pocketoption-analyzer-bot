@@ -84,6 +84,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # PRICE_FINAL
 # STEP_COMPARE
 # LOOP_CHECK
+# PRICE_TICKER_FIRST
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -877,31 +878,24 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 # AVERAGING: цена из формирующейся свечи (без задержки)
 async def get_current_price_from_forming_candle(client, pair):
-    """PRICE_FINAL: получаем цену через 5-секундные свечи (задержка 1-2 сек)."""
-    # 1. Пробуем 5-секундные свечи (они быстрее обновляются, чем 1м)
+    """PRICE_TICKER_FIRST: сначала forming (без задержки), потом тикер, потом 5-сек свечи."""
+    # 1. Пробуем get_candles_live (forming свеча, без задержки)
     try:
-        candles = await asyncio.wait_for(
-            client.get_candles(pair, 5, 2),  # 5-сек таймфрейм, 2 свечи
-            timeout=2.0
-        )
-        if candles and len(candles) >= 1:
-            # Берем закрытие последней свечи (самая свежая)
-            return float(get_close(candles[-1]))
+        gen = client.get_candles_live(pair, 60, 2)
+        async def _get_forming():
+            async for closed, forming in gen:
+                if isinstance(forming, dict) and "close" in forming:
+                    return float(forming["close"])
+                break
+            return None
+        
+        price = await asyncio.wait_for(_get_forming(), timeout=2.0)
+        if price is not None:
+            return price
     except Exception as e:
-        logger.debug(f"   get_candles(5s) err: {e}")
+        logger.debug(f"   get_candles_live err: {e}")
 
-    # 2. Fallback: 1-минутные свечи (если 5-сек нет)
-    try:
-        candles = await asyncio.wait_for(
-            client.get_candles(pair, 60, 2),
-            timeout=2.0
-        )
-        if candles and len(candles) >= 1:
-            return float(get_close(candles[-1]))
-    except Exception as e:
-        logger.debug(f"   get_candles(1m) err: {e}")
-
-    # 3. Fallback: тикер
+    # 2. Пробуем тикер (get_current_price, без задержки)
     try:
         price = await asyncio.wait_for(get_current_price(client, pair), timeout=2.0)
         if price is not None:
@@ -909,7 +903,18 @@ async def get_current_price_from_forming_candle(client, pair):
     except Exception as e:
         logger.debug(f"   get_current_price err: {e}")
 
-    logger.warning(f"   ⚠ PRICE_FINAL: не удалось получить цену для {pair}")
+    # 3. Fallback: 5-секундные свечи (с задержкой, но хоть что-то)
+    try:
+        candles = await asyncio.wait_for(
+            client.get_candles(pair, 5, 2),
+            timeout=2.0
+        )
+        if candles and len(candles) >= 1:
+            return float(get_close(candles[-1]))
+    except Exception as e:
+        logger.debug(f"   get_candles(5s) err: {e}")
+
+    logger.warning(f"   ⚠ PRICE_TICKER_FIRST: не удалось получить цену для {pair}")
     return None
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
