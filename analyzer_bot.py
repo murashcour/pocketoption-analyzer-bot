@@ -77,6 +77,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # WINDOW_48
 # FORMING_PRICE_FIX
 # AVERAGING_CHECK
+# FORMING_PRICE_STRICT
+# CHECK_30S_FIX
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -869,27 +871,30 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 # AVERAGING: цена из формирующейся свечи (без задержки)
 async def get_current_price_from_forming_candle(client, pair):
-    """FORMING_PRICE_FIX: надёжное получение цены (ретраи + fallback)."""
-    # Попытка 1: get_candles_live (формирующаяся свеча)
-    for attempt in range(3):
-        try:
-            candles = await client.get_candles_live(pair, 60, 2)
-            async for closed, forming in candles:
-                if isinstance(forming, dict) and "close" in forming:
-                    return float(forming["close"])
-                break
-        except Exception as e:
-            logger.debug(f"   get_candles_live ({attempt+1}/3): {e}")
-        await asyncio.sleep(1)
-    
-    # Попытка 2: get_candles (закрытые свечи, fallback)
+    """FORMING_PRICE_STRICT: получаем цену ТОЛЬКО из формирующейся свечи (без запаздывания)."""
+    # 1. Пытаемся получить именно ФОРМИРУЮЩУЮСЯ свечу
     try:
-        candles = await client.get_candles(pair, 60, 2)
-        if candles and len(candles) >= 1:
-            return float(get_close(candles[-1]))
+        gen = client.get_candles_live(pair, 60, 2)
+        async for closed, forming in gen:
+            # Проверяем, что нам вернули словарь с ценой закрытия (текущей)
+            if isinstance(forming, dict) and "close" in forming:
+                price = float(forming["close"])
+                logger.debug(f"   [PRICE] forming close={price:.5f}")
+                return price
+            break
     except Exception as e:
-        logger.debug(f"   get_candles fallback: {e}")
-    
+        logger.debug(f"   get_candles_live error: {e}")
+
+    # 2. Fallback: получаем текущий тикер (spot price)
+    try:
+        price = await get_current_price(client, pair)
+        if price is not None:
+            logger.debug(f"   [PRICE] ticker price={price:.5f}")
+            return price
+    except Exception as e:
+        logger.debug(f"   get_current_price error: {e}")
+
+    logger.warning(f"   ⚠ FORMING_PRICE_STRICT: не удалось получить цену для {pair}")
     return None
 
 
@@ -964,17 +969,9 @@ async def _check_first_30s(client, pair: str, signal: str, entry_price: float):
       "WAIT_CLOSE" — момент плюс → ждём закрытия 1-й
     """
     try:
-        # 5s свеча (закрытая) — свежее, чем forming 1m
-        try:
-            c5 = await asyncio.wait_for(
-                client.get_candles(pair, 5, 3),
-                timeout=4
-            )
-            if c5 and len(c5) >= 2:
-                current_price = get_close(c5[-2])
-            else:
-                current_price = await get_current_price(client, pair)
-        except Exception:
+        # CHECK_30S_FIX: используем forming candle (без задержки)
+        current_price = await get_current_price_from_forming_candle(client, pair)
+        if current_price is None:
             current_price = await get_current_price(client, pair)
 
         if current_price is None:
