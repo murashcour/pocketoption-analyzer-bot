@@ -75,6 +75,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # HYSTERESIS
 # AVERAGING\n# REAL_PAIRS
 # WINDOW_48
+# FORMING_PRICE_FIX
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -867,14 +868,27 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 # AVERAGING: цена из формирующейся свечи (без задержки)
 async def get_current_price_from_forming_candle(client, pair):
+    """FORMING_PRICE_FIX: надёжное получение цены (ретраи + fallback)."""
+    # Попытка 1: get_candles_live (формирующаяся свеча)
+    for attempt in range(3):
+        try:
+            candles = await client.get_candles_live(pair, 60, 2)
+            async for closed, forming in candles:
+                if isinstance(forming, dict) and "close" in forming:
+                    return float(forming["close"])
+                break
+        except Exception as e:
+            logger.debug(f"   get_candles_live ({attempt+1}/3): {e}")
+        await asyncio.sleep(1)
+    
+    # Попытка 2: get_candles (закрытые свечи, fallback)
     try:
-        candles = await client.get_candles_live(pair, 60, 2)
-        async for closed, forming in candles:
-            if isinstance(forming, dict) and "close" in forming:
-                return float(forming["close"])
-            break
-    except Exception:
-        return None
+        candles = await client.get_candles(pair, 60, 2)
+        if candles and len(candles) >= 1:
+            return float(get_close(candles[-1]))
+    except Exception as e:
+        logger.debug(f"   get_candles fallback: {e}")
+    
     return None
 
 
