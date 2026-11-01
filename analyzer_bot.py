@@ -74,6 +74,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # SQUEEZE_HYSTERESIS
 # HYSTERESIS
 # AVERAGING\n# REAL_PAIRS
+# WINDOW_48
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -110,7 +111,7 @@ DEFAULT_CONFIG = {
     "vwap_filter_enabled": False,
     "sr_proximity_percent": 0.5,
     "pair_stats_enabled": True,
-    "history_window_hours": 24,
+    "history_window_hours": 48,
     "pair_stats_min_winrate": 49.0,
     "atr_period": 14,
     "atr_min_percent": 0.015,
