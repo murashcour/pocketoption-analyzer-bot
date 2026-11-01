@@ -73,13 +73,16 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # ADX_VWAP
 # SQUEEZE_HYSTERESIS
 # HYSTERESIS
-# DEFAULT_CONFIG_V2
+# AVERAGING\n# DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0],
     "martingale_steps_count": 1,
+    "averaging_enabled": False,
+    "averaging_step_sec": 15,
+    "averaging_max_steps": 4,
     "pure_martingale": False,
     "martingale_enabled": False,
     "payout_min": 85,
@@ -845,6 +848,20 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
     """
     return True
 
+
+# AVERAGING: цена из формирующейся свечи (без задержки)
+async def get_current_price_from_forming_candle(client, pair):
+    try:
+        candles = await client.get_candles_live(pair, 60, 2)
+        async for closed, forming in candles:
+            if isinstance(forming, dict) and "close" in forming:
+                return float(forming["close"])
+            break
+    except Exception:
+        return None
+    return None
+
+
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
     """
     Открывает сделку СРАЗУ.
@@ -1419,6 +1436,83 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
                 pairs_tried = 0
             continue
         return pair, deal
+
+
+async def run_averaging_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
+    """
+    AVERAGING: усреднение без мартингейла.
+    1-я: $1. Через 15 сек: если в минусе — 2-я $1. И т.д. до 4-х.
+    """
+    try:
+        B_start = await _safe_get_balance(client)
+    except Exception as e:
+        logger.error(f"Не удалось получить баланс: {e}")
+        return False
+
+    bet = 1.0
+    max_steps = CFG.get("averaging_max_steps", 4)
+    step_sec = CFG.get("averaging_step_sec", 15)
+    direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
+
+    logger.info(f"\n🎬 УСРЕДНЕНИЕ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
+    logger.info(f"   Ставка: ${bet:.2f} × {max_steps} (макс риск ${bet*max_steps:.2f})")
+
+    deals = []
+    for step in range(max_steps):
+        if stopper.requested():
+            logger.warning("⏹ Остановка во время усреднения")
+            break
+
+        # Открываем сделку
+        deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
+        if deal is None:
+            logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
+            break
+        deals.append(deal)
+        logger.info(f"   📈 [{step+1}/{max_steps}] Открыл ${bet:.2f} {direction_str}")
+
+        # Если это не последняя ступень — ждём 15 сек и проверяем
+        if step < max_steps - 1:
+            await stopper.sleep(step_sec)
+            current_price = await get_current_price_from_forming_candle(client, pair)
+            if current_price is None:
+                logger.warning("   ⚠ Цена не получена — стоп")
+                break
+            # Проверяем, в минусе ли ВСЕ открытые сделки
+            all_in_loss = True
+            for d in deals:
+                if signal == "CALL":
+                    if current_price > d["entry"]:
+                        all_in_loss = False
+                        break
+                else:
+                    if current_price < d["entry"]:
+                        all_in_loss = False
+                        break
+            if not all_in_loss:
+                logger.info(f"   ✅ Хотя бы одна в плюсе — стоп (шаг {step+1})")
+                break
+            logger.info(f"   ❌ Все в минусе — открываю {step+2}-ю")
+
+    # Ждём закрытия последней сделки
+    if deals:
+        await _wait_close(deals[-1], stopper)
+
+    try:
+        B_final = await _safe_get_balance(client)
+    except Exception:
+        return False
+
+    delta = B_final - B_start
+    if state is not None:
+        state.last_delta = delta
+
+    if delta > 0:
+        logger.info(f"✅ УСРЕДНЕНИЕ ПЛЮС (Δ {delta:+.2f})")
+        return True
+    else:
+        logger.info(f"❌ УСРЕДНЕНИЕ МИНУС (Δ {delta:+.2f})")
+        return False
 
 
 async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
@@ -2535,9 +2629,14 @@ class Trader:
                     self.empty_candles_count = 0
 
                 self.state.skip_streak = 0
-                is_win = await run_martingale_series(
-                    client, pair, signal, self.stopper, self.state, entry_price
-                )
+                if CFG.get("averaging_enabled", False):
+                    is_win = await run_averaging_series(
+                        client, pair, signal, self.stopper, self.state, entry_price
+                    )
+                else:
+                    is_win = await run_martingale_series(
+                        client, pair, signal, self.stopper, self.state, entry_price
+                    )
 
                 # === DOUBLE MARTINGALE LOGIC ===
                 if CFG.get("double_martingale_enabled", False):
@@ -2669,6 +2768,9 @@ MENU_FIELDS = [
     ("vwap_filter_enabled",       "VWAP фильтр (True/False)",             "VWAP filter enabled (True/False)"),
     ("squeeze_filter_enabled",    "Squeeze фильтр (True/False)",          "Squeeze filter enabled (True/False)"),
     ("hysteresis_enabled",        "Гистерезис (True/False)",              "Hysteresis (True/False)"),
+    ("averaging_enabled",         "Усреднение (True/False)",              "Averaging enabled (True/False)"),
+    ("averaging_step_sec",        "Усреднение: шаг (сек)",                "Averaging: step (sec)"),
+    ("averaging_max_steps",       "Усреднение: макс. ступеней",           "Averaging: max steps"),
 ]
 
 def _format_value(val) -> str:
