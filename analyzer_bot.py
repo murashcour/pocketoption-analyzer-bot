@@ -69,6 +69,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # BAD_PAIRS_FIX
 # BAD_PAIRS_FIX2
 # FIX_SESSION
+# PAYOUT_FIX
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -946,8 +947,17 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
 
         deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper, entry_price)
         if deal is None:
-            logger.warning(f"   ⚠ Ошибка открытия — повтор через 5 сек")
-            await stopper.sleep(5)
+            # PAYOUT_FIX: при отмене (payout) — смена пары, а не зацикливание
+            logger.warning(f"   ⚠ Ошибка открытия (payout?) — смена пары")
+            if state is not None:
+                state.change_pair("1-я: отмена открытия (payout)")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
             continue
 
         # Обновить entry_price из deal (реальная цена открытия)
@@ -1101,8 +1111,17 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
         # Открыть
         deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry)
         if deal is None:
-            logger.warning(f"   ⚠️ Ошибка открытия 2-й — повтор через 5 сек")
-            await stopper.sleep(5)
+            # PAYOUT_FIX: при отмене (payout) — смена пары
+            logger.warning(f"   ⚠️ Ошибка открытия 2-й (payout?) — смена пары")
+            if state is not None:
+                state.change_pair("2-я: отмена открытия (payout)")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
             continue
         return pair, deal
 
@@ -1185,8 +1204,17 @@ async def _open_step_3(client, pair: str, signal: str, steps: list, stopper,
 
         deal = await _open_deal_raw(client, pair, 2, new_signal, steps, stopper, new_entry)
         if deal is None:
-            logger.warning(f"   ⚠ Ошибка открытия 3-й — повтор через 5 сек")
-            await stopper.sleep(5)
+            # PAYOUT_FIX: при отмене (payout) — смена пары
+            logger.warning(f"   ⚠ Ошибка открытия 3-й (payout?) — смена пары")
+            if state is not None:
+                state.change_pair("3-я: отмена открытия (payout)")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
             continue
         return pair, deal
 
@@ -1277,8 +1305,17 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
         deal = await _open_deal_raw(client, pair, 3, new_signal, steps, stopper, new_entry)
         if deal is None:
-            logger.warning(f"   ⚠ Ошибка открытия 4-й — повтор через 5 сек")
-            await stopper.sleep(5)
+            # PAYOUT_FIX: при отмене (payout) — смена пары
+            logger.warning(f"   ⚠ Ошибка открытия 4-й (payout?) — смена пары")
+            if state is not None:
+                state.change_pair("4-я: отмена открытия (payout)")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
             continue
         return pair, deal
 
