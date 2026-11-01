@@ -73,7 +73,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # ADX_VWAP
 # SQUEEZE_HYSTERESIS
 # HYSTERESIS
-# AVERAGING\n# DEFAULT_CONFIG_V2
+# AVERAGING\n# REAL_PAIRS
+# DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
     "base_percent": 1.0,
@@ -92,7 +93,7 @@ DEFAULT_CONFIG = {
     "payout_min_real": 85,
     "payout_max_real": 92,
     "payout_recheck_sec": 600,
-    "include_real": False,
+    "include_real": True,
     "real_asset_types": ["currency"],
     "timezone": "Europe/Moscow",
     "forex_trade_days": [0, 1, 2, 3, 4],

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 HISTORY_DIR = Path("history")
+HISTORY_REAL_DIR = Path("history_real")
 STATS_FILE = Path("pair_stats.json")
 
 def analyze_csv(filepath: Path):
@@ -67,25 +68,41 @@ def analyze_csv(filepath: Path):
     return wins, losses
 
 def main():
-    if not HISTORY_DIR.exists():
-        print("ERR: Папка history/ не найдена")
-        return
-
     stats = {}
-    for csv_file in HISTORY_DIR.glob("*.csv"):
-        pair = csv_file.stem
-        wins, losses = analyze_csv(csv_file)
-        total = wins + losses
-        if total == 0:
-            continue
-        winrate = (wins / total) * 100
-        stats[pair] = {
-            "winrate": round(winrate, 2),
-            "wins": wins,
-            "losses": losses,
-            "total": total,
-        }
-        print(f"{pair}: {winrate:.1f}% ({wins}/{total})")
+    
+    # OTC-пары (history/)
+    if HISTORY_DIR.exists():
+        for csv_file in HISTORY_DIR.glob("*.csv"):
+            pair = csv_file.stem
+            wins, losses = analyze_csv(csv_file)
+            total = wins + losses
+            if total == 0:
+                continue
+            winrate = (wins / total) * 100
+            stats[pair] = {
+                "winrate": round(winrate, 2),
+                "wins": wins,
+                "losses": losses,
+                "total": total,
+            }
+            print(f"{pair} (OTC): {winrate:.1f}% ({wins}/{total})")
+    
+    # REAL_PAIRS: Real-пары (history_real/)
+    if HISTORY_REAL_DIR.exists():
+        for csv_file in HISTORY_REAL_DIR.glob("*.csv"):
+            pair = csv_file.stem
+            wins, losses = analyze_csv(csv_file)
+            total = wins + losses
+            if total == 0:
+                continue
+            winrate = (wins / total) * 100
+            stats[pair] = {
+                "winrate": round(winrate, 2),
+                "wins": wins,
+                "losses": losses,
+                "total": total,
+            }
+            print(f"{pair} (REAL): {winrate:.1f}% ({wins}/{total})")
 
     if not stats:
         print("ERR: Нет данных")
