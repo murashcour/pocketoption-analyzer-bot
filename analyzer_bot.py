@@ -85,6 +85,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # STEP_COMPARE
 # LOOP_CHECK
 # PRICE_TICKER_FIRST
+# FINAL_BREAK
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1545,10 +1546,11 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             
             if loss_pct > threshold_pct:
                 logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {len(deals)+2}-ю")
-                # Продолжаем цикл (открываем следующую)
+                # Идем дальше к открытию сделки
             else:
                 logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ следующего шага (не открываю)")
-                # НЕ делаем break, а просто ждем следующей итерации (через 15 сек)
+                await stopper.sleep(step_sec) # Ждем следующий шаг
+                continue  # <--- ВОТ ГЛАВНОЕ: пропускаем открытие, идем на следующую итерацию
 
     # Ждём закрытия последней сделки
     if deals:
