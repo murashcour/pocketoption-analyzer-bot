@@ -60,3 +60,4 @@ patch_*.py
 history/
 pair_stats.json
 analyzer_bot.log
+test_filters.py

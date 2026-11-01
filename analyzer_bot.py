@@ -71,6 +71,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FIX_SESSION
 # PAYOUT_FIX
 # ADX_VWAP
+# SQUEEZE_HYSTERESIS
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -98,6 +99,8 @@ DEFAULT_CONFIG = {
     "rsi_bear_max": 47,
     "sr_lookback": 50,
     "adx_filter_enabled": False,
+    "squeeze_filter_enabled": False,
+    "hysteresis_enabled": False,
     "adx_min": 20.0,
     "vwap_filter_enabled": False,
     "sr_proximity_percent": 0.5,
@@ -565,6 +568,38 @@ def calc_vwap(candles: List) -> Optional[float]:
     return total_pv / total_v
 
 
+
+# SQUEEZE_HYSTERESIS: Squeeze (BB внутри KC)
+def calc_squeeze(candles: List, period: int = 20, mult: float = 2.0) -> bool:
+    """True, если BB внутри KC (сжатие)."""
+    if len(candles) < period:
+        return False
+    closes = [get_close(c) for c in candles[-period:]]
+    highs = [get_high(c) for c in candles[-period:]]
+    lows = [get_low(c) for c in candles[-period:]]
+    
+    # BB
+    mid = sum(closes) / period
+    variance = sum((x - mid) ** 2 for x in closes) / period
+    std = variance ** 0.5
+    bb_upper = mid + mult * std
+    bb_lower = mid - mult * std
+    
+    # KC
+    trs = []
+    for i in range(1, len(candles[-period:])):
+        h = get_high(candles[-period:][i])
+        l = get_low(candles[-period:][i])
+        prev_c = get_close(candles[-period:][i-1])
+        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        trs.append(tr)
+    atr_val = sum(trs) / len(trs) if trs else 0
+    kc_upper = mid + mult * atr_val
+    kc_lower = mid - mult * atr_val
+    
+    return (bb_upper < kc_upper) and (bb_lower > kc_lower)
+
+
 async def full_analysis(client, pair: str):
     """Мульти-ТФ анализ: 1м + 5м + 15м + S/R + ATR. Возвращает (signal, price)."""
     # ===== БЫСТРАЯ ПРОВЕРКА: ТОЛЬКО 1м =====
@@ -607,6 +642,13 @@ async def full_analysis(client, pair: str):
             if adx_val < CFG.get("adx_min", 20.0):
                 logger.info(f"   [ADX] флэт (< {CFG.get('adx_min', 20.0)}) — пропуск")
                 return None, None, "ADX_FLAT"
+
+    # SQUEEZE_HYSTERESIS: Squeeze фильтр
+    if CFG.get("squeeze_filter_enabled", False):
+        is_squeeze = calc_squeeze(c1)
+        if is_squeeze:
+            logger.info(f"   [Squeeze] сжатие BB внутри KC — пропуск")
+            return None, None, "SQUEEZE"
 
     # ADX_VWAP: VWAP фильтр
     if CFG.get("vwap_filter_enabled", False):
@@ -2610,6 +2652,8 @@ MENU_FIELDS = [
     ("adx_filter_enabled",        "ADX фильтр (True/False)",              "ADX filter enabled (True/False)"),
     ("adx_min",                   "ADX мин. порог",                       "ADX min threshold"),
     ("vwap_filter_enabled",       "VWAP фильтр (True/False)",             "VWAP filter enabled (True/False)"),
+    ("squeeze_filter_enabled",    "Squeeze фильтр (True/False)",          "Squeeze filter enabled (True/False)"),
+    ("hysteresis_enabled",        "Гистерезис (True/False)",              "Hysteresis (True/False)"),
 ]
 
 def _format_value(val) -> str:
