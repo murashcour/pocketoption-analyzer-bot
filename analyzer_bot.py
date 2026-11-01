@@ -81,6 +81,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CHECK_30S_FIX
 # FINAL_AVERAGING
 # FAST_PRICE
+# PRICE_FINAL
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -874,30 +875,31 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 # AVERAGING: цена из формирующейся свечи (без задержки)
 async def get_current_price_from_forming_candle(client, pair):
-    """FAST_PRICE: быстрый таймаут (2 сек), 2 попытки."""
-    # 1. Пытаемся получить ФОРМИРУЮЩУЮСЯ свечу
-    for attempt in range(2):
-        try:
-            # Ждем максимум 2 секунды
-            gen = client.get_candles_live(pair, 60, 2)
-            async def _get():
-                async for closed, forming in gen:
-                    if isinstance(forming, dict) and "close" in forming:
-                        return float(forming["close"])
-                    break
-                return None
-            
-            price = await asyncio.wait_for(_get(), timeout=2.0)
-            if price is not None:
-                return price
-        except (asyncio.TimeoutError, Exception) as e:
-            logger.debug(f"   get_candles_live err ({attempt+1}/2): {e}")
-        
-        # Пауза перед второй попыткой
-        if attempt == 0:
-            await asyncio.sleep(0.5)
+    """PRICE_FINAL: получаем цену через 5-секундные свечи (задержка 1-2 сек)."""
+    # 1. Пробуем 5-секундные свечи (они быстрее обновляются, чем 1м)
+    try:
+        candles = await asyncio.wait_for(
+            client.get_candles(pair, 5, 2),  # 5-сек таймфрейм, 2 свечи
+            timeout=2.0
+        )
+        if candles and len(candles) >= 1:
+            # Берем закрытие последней свечи (самая свежая)
+            return float(get_close(candles[-1]))
+    except Exception as e:
+        logger.debug(f"   get_candles(5s) err: {e}")
 
-    # 2. Fallback: тикер (1 попытка, таймаут 2 сек)
+    # 2. Fallback: 1-минутные свечи (если 5-сек нет)
+    try:
+        candles = await asyncio.wait_for(
+            client.get_candles(pair, 60, 2),
+            timeout=2.0
+        )
+        if candles and len(candles) >= 1:
+            return float(get_close(candles[-1]))
+    except Exception as e:
+        logger.debug(f"   get_candles(1m) err: {e}")
+
+    # 3. Fallback: тикер
     try:
         price = await asyncio.wait_for(get_current_price(client, pair), timeout=2.0)
         if price is not None:
@@ -905,7 +907,7 @@ async def get_current_price_from_forming_candle(client, pair):
     except Exception as e:
         logger.debug(f"   get_current_price err: {e}")
 
-    logger.warning(f"   ⚠ FAST_PRICE: цена не получена за 5 сек для {pair}")
+    logger.warning(f"   ⚠ PRICE_FINAL: не удалось получить цену для {pair}")
     return None
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
@@ -1514,9 +1516,9 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             await stopper.sleep(step_sec)
             current_price = await get_current_price_from_forming_candle(client, pair)
             if current_price is None:
-                logger.warning("   ⚠ Цена не получена — открываю догон (без проверки)")
-                # Не останавливаем серию, а просто идем дальше к открытию
-                current_price = 0.0 # Заглушка, чтобы пропустить проверку
+                logger.warning("   ⚠ Цена не получена — пропускаю догон (жду следующий шаг)")
+                # Пропускаем открытие, ждем следующей проверки через 15 сек
+                continue
             # AVERAGING_CHECK: логируем current_price и entry
             logger.info(f"   [CHECK] current_price={current_price:.5f}")
             for i, d in enumerate(deals):
@@ -1526,12 +1528,8 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
             all_in_loss = True
             
-            # Если цена == 0.0 (не получена), принудительно считаем, что все в минусе
-            if current_price == 0.0:
-                all_in_loss = True
-                logger.info("   [CHECK] Цена не получена — принудительный догон")
-            else:
-                for d in deals:
+            # Если цены нет, мы уже вышли через continue
+            for d in deals:
                     if signal == "CALL":
                         loss_pct = (d["entry"] - current_price) / d["entry"]
                     else:
