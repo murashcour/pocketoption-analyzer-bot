@@ -99,6 +99,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # AVERAGING_WAIT
 # OPENED_DEALS_V2
 # PROFIT_FLOAT
+# DOUBLE_CHECK
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1534,17 +1535,32 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             continue
 
         # PROFIT_FLOAT: приводим profit к float (может быть строкой)
+        # DOUBLE_CHECK: проверяем и профит, и цену
         profit_raw = last_deal_info.get("profit", 0)
         try:
             profit = float(str(profit_raw).replace("+", "").replace(",", "."))
         except (ValueError, TypeError):
             profit = 0.0
         
-        logger.info(f"   [CHECK] step={step+1}/{max_steps} | trade_id={last_trade_id} | profit={profit:+.2f}")
+        # Получаем цену (для перекрестной проверки)
+        price_check = await get_current_price(client, pair)
+        if price_check is None:
+            price_check = await get_current_price_from_forming_candle(client, pair)
+        
+        # Сравниваем с ценой входа (как в веб-приложении)
+        entry = last_deal_info.get("entry", entry_price)
+        price_in_loss = False
+        if price_check is not None:
+            if signal == "CALL":
+                price_in_loss = price_check < entry
+            else:
+                price_in_loss = price_check > entry
+        
+        logger.info(f"   [CHECK] step={step+1}/{max_steps} | profit={profit:+.2f} | price={price_check:.5f} (entry={entry:.5f}) | in_loss_by_price={price_in_loss}")
 
-        # Если в минусе (profit < 0) — открываем следующую
-        if profit < 0:
-            logger.info(f"   ❌ Профит {profit:+.2f} < 0 — открываю {step+1}-ю")
+        # Если хотя бы один источник говорит "минус" — открываем догон
+        if profit < 0 or price_in_loss:
+            logger.info(f"   ❌ Минус (profit={profit:+.2f}, price_in_loss={price_in_loss}) — открываю {step+1}-ю")
             new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
             if new_deal is None:
                 logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
