@@ -96,6 +96,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # STEP_10
 # FINAL_LOGIC
 # OPENED_DEALS
+# AVERAGING_WAIT
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1488,6 +1489,13 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
     deals = []
     trade_ids = []
     
+    # AVERAGING_WAIT: ждем окончания свечи (если включено)
+    if CFG.get("wait_candle_start_enabled", False):
+        logger.info("   ⏱ Ожидание начала 1м свечи...")
+        if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+            logger.warning("   ⚠ Не дождались свечи — стоп")
+            return False
+
     # 1. Открываем 1-ю сделку
     deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
     if deal is None:
