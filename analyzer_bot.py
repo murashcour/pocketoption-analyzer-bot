@@ -94,6 +94,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # SIMPLE_AVERAGING
 # TRUE_AVERAGING
 # STEP_10
+# FINAL_LOGIC
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -887,43 +888,14 @@ async def _check_momentum(client, pair: str, signal: str, entry_price: float) ->
 
 # AVERAGING: цена из формирующейся свечи (без задержки)
 async def get_current_price_from_forming_candle(client, pair):
-    """PRICE_TICKER_FIRST: сначала forming (без задержки), потом тикер, потом 5-сек свечи."""
-    # 1. Пробуем get_candles_live (forming свеча, без задержки)
+    """FINAL_LOGIC: получаем АКТУАЛЬНУЮ цену из формирующейся свечи."""
     try:
-        gen = client.get_candles_live(pair, 60, 2)
-        async def _get_forming():
-            async for closed, forming in gen:
-                if isinstance(forming, dict) and "close" in forming:
-                    return float(forming["close"])
-                break
-            return None
-        
-        price = await asyncio.wait_for(_get_forming(), timeout=2.0)
-        if price is not None:
-            return price
+        async for closed, forming in client.get_candles_live(pair, 60, 1):
+            if forming and "close" in forming:
+                return float(forming["close"])
+            break
     except Exception as e:
-        logger.debug(f"   get_candles_live err: {e}")
-
-    # 2. Пробуем тикер (get_current_price, без задержки)
-    try:
-        price = await asyncio.wait_for(get_current_price(client, pair), timeout=1.5)
-        if price is not None:
-            return price
-    except Exception as e:
-        logger.debug(f"   get_current_price err: {e}")
-
-    # 3. Fallback: 5-секундные свечи (с задержкой, но хоть что-то)
-    try:
-        candles = await asyncio.wait_for(
-            client.get_candles(pair, 5, 2),
-            timeout=2.0
-        )
-        if candles and len(candles) >= 1:
-            return float(get_close(candles[-1]))
-    except Exception as e:
-        logger.debug(f"   get_candles(5s) err: {e}")
-
-    logger.warning(f"   ⚠ PRICE_TICKER_FIRST: не удалось получить цену для {pair}")
+        logger.debug(f"Ошибка get_candles_live для {pair}: {e}")
     return None
 
 async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
@@ -1496,7 +1468,12 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
 async def run_averaging_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
-    TRUE_AVERAGING: сравниваем с ПОСЛЕДНЕЙ сделкой. Если в плюсе — ждем (не выходим).
+    FINAL_LOGIC: 
+    1. Открываем 1-ю сделку (запоминаем цену).
+    2. Ждем 10 сек.
+    3. Получаем текущую цену.
+    4. Сравниваем с последней сделкой (вниз: цена < входа — ждем; цена > входа — открываем).
+    5. Если открыли — запоминаем новую цену и повторяем.
     """
     try:
         B_start = await _safe_get_balance(client)
@@ -1507,7 +1484,6 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
     bet = 1.0
     step_sec = CFG.get("averaging_step_sec", 10)
     max_steps = CFG.get("averaging_max_steps", 4)
-    threshold_pct = CFG.get("averaging_threshold_pct", 0.02) / 100.0
     direction_str = "ВВЕРХ ⬆ (CALL)" if signal == "CALL" else "ВНИЗ ⬇ (PUT)"
 
     logger.info(f"\n🎬 УСРЕДНЕНИЕ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
@@ -1523,39 +1499,40 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
     deals.append(deal)
     logger.info(f"   📈 [1/{max_steps}] Открыл ${bet:.2f} {direction_str}")
 
-    # 2. Цикл шагов (строго 4 шага)
+    # 2. Цикл догонов
     for step in range(1, max_steps):
         if stopper.requested():
             break
 
-        # Ждем 15 секунд
+        # Ждем 10 секунд
         await stopper.sleep(step_sec)
 
-        # Получаем цену
+        # Получаем текущую цену
         current_price = await get_current_price_from_forming_candle(client, pair)
         if current_price is None:
             logger.warning(f"   ⚠ Цена не получена — пропускаю шаг {step+1}")
             continue
 
-        # Сравниваем с ценой ПОСЛЕДНЕЙ сделки
+        # Сравниваем с ПОСЛЕДНЕЙ сделкой
         last_entry = deals[-1]["entry"]
         
-        # Для CALL: цена ниже входа — минус. Для PUT: цена выше входа — минус.
         if signal == "CALL":
-            loss_pct = (last_entry - current_price) / last_entry
-        else:
-            loss_pct = (current_price - last_entry) / last_entry
+            # Для CALL: цена ниже входа = минус (открываем); цена выше = плюс (ждем)
+            if current_price > last_entry:
+                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} > entry={last_entry:.5f} — ЖДЁМ (в плюсе)")
+                continue
+            else:
+                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} <= entry={last_entry:.5f} — ОТКРЫВАЮ {step+1}-ю")
+        else:  # PUT
+            # Для PUT: цена выше входа = минус (открываем); цена ниже = плюс (ждем)
+            if current_price < last_entry:
+                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} < entry={last_entry:.5f} — ЖДЁМ (в плюсе)")
+                continue
+            else:
+                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} >= entry={last_entry:.5f} — ОТКРЫВАЮ {step+1}-ю")
 
-        logger.info(f"   [CHECK] step={step+1}/{max_steps} | last_entry={last_entry:.5f} | current={current_price:.5f} | loss={loss_pct*100:+.2f}%")
-
-        # Если в плюсе (loss < threshold) — НЕ ВЫХОДИМ, а просто ждем следующего шага
-        if loss_pct <= threshold_pct:
-            logger.info(f"   ✅ Убыток {loss_pct*100:+.2f}% <= {threshold_pct*100:.2f}% — ЖДЁМ следующего шага (не открываю)")
-            continue  # Ждем следующего шага (цикл идет дальше)
-
-        # Если в минусе — открываем следующую
-        logger.info(f"   ❌ Убыток {loss_pct*100:+.2f}% > {threshold_pct*100:.2f}% — открываю {step+1}-ю")
-        new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
+        # Открываем следующую сделку
+        new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, current_price)
         if new_deal is None:
             logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
             break
