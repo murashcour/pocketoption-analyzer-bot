@@ -101,6 +101,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # PROFIT_FLOAT
 # DOUBLE_CHECK
 # PREV_ENTRY_V2
+# TRADE_WINRATE
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1799,6 +1800,10 @@ class TraderState:
         self.total_losses = 0
         self.total_skips = 0
         self.total_pair_changes = 0
+        # TRADE_WINRATE: счётчики по сделкам
+        self.total_trades = 0
+        self.win_trades = 0
+        self.loss_trades = 0
 
         self.last_series_won: Optional[bool] = None
         self.skip_limit: int = CFG["skip_before_change_minus"]
@@ -1859,6 +1864,14 @@ class TraderState:
             self.pair_stats[pair]["losses"] += 1
             self.hour_stats[hour]["losses"] += 1
 
+    def record_trade(self, is_win: bool):
+        """TRADE_WINRATE: записываем результат сделки."""
+        self.total_trades += 1
+        if is_win:
+            self.win_trades += 1
+        else:
+            self.loss_trades += 1
+
     def on_win(self):
         self._record_stats(True)
         self.skip_streak = 0
@@ -1888,10 +1901,13 @@ class TraderState:
 
     def summary(self) -> str:
         wr = (self.total_wins / self.total_series * 100) if self.total_series else 0.0
+        trade_wr = (self.win_trades / self.total_trades * 100) if self.total_trades else 0.0
         lines = [
             f"📊 ИТОГИ:",
             f"   Серий: {self.total_series} (✅ {self.total_wins} / ❌ {self.total_losses})",
-            f"   Winrate: {wr:.1f}%",
+            f"   Winrate (серии): {wr:.1f}%",
+            f"   Сделок: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})",
+            f"   Winrate (сделки): {trade_wr:.1f}%",
             f"   Пропусков: {self.total_skips}",
             f"   Смен пар: {self.total_pair_changes}",
         ]
