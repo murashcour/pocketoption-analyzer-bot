@@ -97,6 +97,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # FINAL_LOGIC
 # OPENED_DEALS
 # AVERAGING_WAIT
+# OPENED_DEALS_V2
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1514,7 +1515,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
 
         # Получаем все открытые сделки
         try:
-            opened = await client.get_opened_deals()
+            opened = await client.opened_deals()  # OPENED_DEALS_V2
         except Exception as e:
             logger.warning(f"   ⚠ Ошибка get_opened_deals: {e} — пропускаю шаг")
             continue
