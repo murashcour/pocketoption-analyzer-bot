@@ -98,6 +98,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # OPENED_DEALS
 # AVERAGING_WAIT
 # OPENED_DEALS_V2
+# PROFIT_FLOAT
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1532,7 +1533,13 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             logger.warning(f"   ⚠ Сделка {last_trade_id} не найдена в opened — возможно, закрыта. Пропускаю.")
             continue
 
-        profit = last_deal_info.get("profit", 0)
+        # PROFIT_FLOAT: приводим profit к float (может быть строкой)
+        profit_raw = last_deal_info.get("profit", 0)
+        try:
+            profit = float(str(profit_raw).replace("+", "").replace(",", "."))
+        except (ValueError, TypeError):
+            profit = 0.0
+        
         logger.info(f"   [CHECK] step={step+1}/{max_steps} | trade_id={last_trade_id} | profit={profit:+.2f}")
 
         # Если в минусе (profit < 0) — открываем следующую
