@@ -95,6 +95,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # TRUE_AVERAGING
 # STEP_10
 # FINAL_LOGIC
+# OPENED_DEALS
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1468,12 +1469,7 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
 
 async def run_averaging_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
-    FINAL_LOGIC: 
-    1. Открываем 1-ю сделку (запоминаем цену).
-    2. Ждем 10 сек.
-    3. Получаем текущую цену.
-    4. Сравниваем с последней сделкой (вниз: цена < входа — ждем; цена > входа — открываем).
-    5. Если открыли — запоминаем новую цену и повторяем.
+    OPENED_DEALS: проверяем profit через get_opened_deals().
     """
     try:
         B_start = await _safe_get_balance(client)
@@ -1490,6 +1486,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
     logger.info(f"   Ставка: ${bet:.2f} × {max_steps} (макс риск ${bet*max_steps:.2f})")
 
     deals = []
+    trade_ids = []
     
     # 1. Открываем 1-ю сделку
     deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
@@ -1497,6 +1494,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         logger.warning("   ⚠ Не удалось открыть 1-ю — стоп")
         return False
     deals.append(deal)
+    trade_ids.append(deal["id"])
     logger.info(f"   📈 [1/{max_steps}] Открыл ${bet:.2f} {direction_str}")
 
     # 2. Цикл догонов
@@ -1504,40 +1502,42 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         if stopper.requested():
             break
 
-        # Ждем 10 секунд
         await stopper.sleep(step_sec)
 
-        # Получаем текущую цену
-        current_price = await get_current_price_from_forming_candle(client, pair)
-        if current_price is None:
-            logger.warning(f"   ⚠ Цена не получена — пропускаю шаг {step+1}")
+        # Получаем все открытые сделки
+        try:
+            opened = await client.get_opened_deals()
+        except Exception as e:
+            logger.warning(f"   ⚠ Ошибка get_opened_deals: {e} — пропускаю шаг")
             continue
 
-        # Сравниваем с ПОСЛЕДНЕЙ сделкой
-        last_entry = deals[-1]["entry"]
-        
-        if signal == "CALL":
-            # Для CALL: цена ниже входа = минус (открываем); цена выше = плюс (ждем)
-            if current_price > last_entry:
-                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} > entry={last_entry:.5f} — ЖДЁМ (в плюсе)")
-                continue
-            else:
-                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} <= entry={last_entry:.5f} — ОТКРЫВАЮ {step+1}-ю")
-        else:  # PUT
-            # Для PUT: цена выше входа = минус (открываем); цена ниже = плюс (ждем)
-            if current_price < last_entry:
-                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} < entry={last_entry:.5f} — ЖДЁМ (в плюсе)")
-                continue
-            else:
-                logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={current_price:.5f} >= entry={last_entry:.5f} — ОТКРЫВАЮ {step+1}-ю")
+        # Ищем нашу последнюю сделку по ID
+        last_trade_id = trade_ids[-1]
+        last_deal_info = None
+        for d in opened:
+            if d.get("id") == last_trade_id:
+                last_deal_info = d
+                break
 
-        # Открываем следующую сделку
-        new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, current_price)
-        if new_deal is None:
-            logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
-            break
-        deals.append(new_deal)
-        logger.info(f"   📈 [{step+1}/{max_steps}] Открыл ${bet:.2f} {direction_str}")
+        if last_deal_info is None:
+            logger.warning(f"   ⚠ Сделка {last_trade_id} не найдена в opened — возможно, закрыта. Пропускаю.")
+            continue
+
+        profit = last_deal_info.get("profit", 0)
+        logger.info(f"   [CHECK] step={step+1}/{max_steps} | trade_id={last_trade_id} | profit={profit:+.2f}")
+
+        # Если в минусе (profit < 0) — открываем следующую
+        if profit < 0:
+            logger.info(f"   ❌ Профит {profit:+.2f} < 0 — открываю {step+1}-ю")
+            new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
+            if new_deal is None:
+                logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
+                break
+            deals.append(new_deal)
+            trade_ids.append(new_deal["id"])
+            logger.info(f"   📈 [{step+1}/{max_steps}] Открыл ${bet:.2f} {direction_str}")
+        else:
+            logger.info(f"   ✅ Профит {profit:+.2f} >= 0 — ЖДЁМ (в плюсе)")
 
     # Ждём закрытия последней сделки
     if deals:
