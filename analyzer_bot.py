@@ -100,6 +100,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # OPENED_DEALS_V2
 # PROFIT_FLOAT
 # DOUBLE_CHECK
+# PREV_ENTRY_V2
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1561,7 +1562,8 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         # Если хотя бы один источник говорит "минус" — открываем догон
         if profit < 0 or price_in_loss:
             logger.info(f"   ❌ Минус (profit={profit:+.2f}, price_in_loss={price_in_loss}) — открываю {step+1}-ю")
-            new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
+            new_entry = price_check if price_check is not None else entry_price
+            new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, new_entry)
             if new_deal is None:
                 logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
                 break
