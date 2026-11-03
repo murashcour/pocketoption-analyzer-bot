@@ -109,6 +109,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CLOSED_DEALS_ON_STOP
 # STOP_FLAG_FIX
 # CLOSED_DEALS_V2
+# CHECK_WIN_V2
+# WAIT_CLOSE_STATE_V2
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -966,14 +968,39 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
         logger.error(f"❌ Ошибка открытия ${steps[step_idx]:.2f}: {e}")
         return None
 
-async def _wait_close(deal: dict, stopper):
+
+async def check_win_safe(client, trade_id: str) -> Optional[dict]:
+    """CHECK_WIN_V2: безопасный вызов check_win (с таймаутом)."""
+    try:
+        result = await asyncio.wait_for(client.check_win(trade_id), timeout=5.0)
+        return result
+    except Exception as e:
+        logger.debug(f"check_win({trade_id}): {e}")
+        return None
+
+async def _wait_close(deal: dict, stopper, state=None):
     """
     Ждёт закрытия сделки (expiration + 5 сек запас).
+    CHECK_WIN_V2: после закрытия — check_win(trade_id) и запись в state.
     """
     last_open_time = deal["open_time"]
     remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
     logger.info(f"⏳ Ждём закрытия сделки #{deal['step']} (~{remaining:.0f} сек)...")
     await stopper.sleep(remaining)
+
+    # CHECK_WIN_V2: получаем результат через check_win
+    if state is not None:
+        try:
+            trade_id = deal.get("id")
+            if trade_id:
+                result = await check_win_safe(client, trade_id)
+                if result:
+                    is_win = result.get("result") == "win"
+                    profit = result.get("profit", 0)
+                    state.record_trade(is_win)
+                    logger.info(f"🏁 Сделка #{deal['step']} закрыта: {'✅ WIN' if is_win else '❌ LOSS'} (profit={profit})")
+        except Exception as e:
+            logger.debug(f"Ошибка check_win: {e}")
 
 async def _check_first_30s(client, pair: str, signal: str, entry_price: float):
     """
@@ -1576,7 +1603,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
 
     # Ждём закрытия последней сделки
     if deals:
-        await _wait_close(deals[-1], stopper)
+        await _wait_close(deals[-1], stopper, state)
 
     try:
         B_final = await _safe_get_balance(client)
@@ -1641,7 +1668,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
 
     # ===== ШАГ 2: Ждём закрытия 1-й =====
     logger.info(f"⏳ Ждём закрытия 1-й ступени...")
-    await _wait_close(deal_1, stopper)
+    await _wait_close(deal_1, stopper, state)
 
     if stopper.requested():
         logger.warning("⏹ Остановка во время серии")
@@ -1682,7 +1709,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         return False
 
     # ===== ШАГ 3: Ждём закрытия 2-й =====
-    await _wait_close(deal_2, stopper)
+    await _wait_close(deal_2, stopper, state)
 
     try:
         B_after_2 = float(await client.balance())
@@ -1722,7 +1749,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.info(f"❌ 3-я не открыта — серия закрыта")
         return False
 
-    await _wait_close(deal_3, stopper)
+    await _wait_close(deal_3, stopper, state)
 
     try:
         B_after_3 = float(await client.balance())
@@ -1757,7 +1784,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.info(f"❌ 4-я не открыта — серия закрыта")
         return False
 
-    await _wait_close(deal_4, stopper)
+    await _wait_close(deal_4, stopper, state)
 
     try:
         B_final = float(await client.balance())
@@ -2430,7 +2457,7 @@ async def run_manual_mode(client, state, stopper, mode):
                                 input, "   Ждать закрытия? [Enter=да / n=нет]: "
                             )
                             if ans.strip().lower() not in ("n", "no", "н", "нет"):
-                                await _wait_close(deal, stopper)
+                                await _wait_close(deal, stopper, state)
                     elif ans == "s":
                         state.change_pair("ручной: смена пары")
                         continue
