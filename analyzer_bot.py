@@ -103,6 +103,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # PREV_ENTRY_V2
 # TRADE_WINRATE
 # CHECK_ALL_DEALS
+# PRICE_ONLY
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1525,34 +1526,32 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             logger.warning(f"   ⚠ Ошибка get_opened_deals: {e} — пропускаю шаг")
             continue
 
-        # CHECK_ALL_DEALS: собираем ВСЕ наши открытые сделки
-        our_deals = []
-        for d in opened:
-            if d.get("id") in trade_ids:
-                our_deals.append(d)
-
-        if not our_deals:
-            logger.warning(f"   ⚠ Ни одна сделка не найдена в opened — возможно, закрыты. Пропускаю.")
+        # PRICE_ONLY: сравниваем цену с ценой ПОСЛЕДНЕЙ сделки
+        last_deal = deals[-1]
+        entry = last_deal["entry"]
+        
+        # Получаем текущую цену
+        price_check = await get_current_price(client, pair)
+        if price_check is None:
+            price_check = await get_current_price_from_forming_candle(client, pair)
+        
+        if price_check is None:
+            logger.warning(f"   ⚠ Цена не получена — пропускаю шаг")
             continue
-
-        # Проверяем, есть ли ХОТЯ БЫ ОДНА в плюсе
-        any_in_profit = False
-        for d in our_deals:
-            profit_raw = d.get("profit", 0)
-            try:
-                profit = float(str(profit_raw).replace("+", "").replace(",", "."))
-            except (ValueError, TypeError):
-                profit = 0.0
-            
-            if profit >= 0:
-                any_in_profit = True
-                logger.info(f"   [CHECK] Сделка {str(d.get('id'))[:8]}... profit={profit:+.2f} — В ПЛЮСЕ")
-            else:
-                logger.info(f"   [CHECK] Сделка {str(d.get('id'))[:8]}... profit={profit:+.2f} — В МИНУСЕ")
-
-        # Если хотя бы одна в плюсе — НЕ открываем догон
-        if any_in_profit:
-            logger.info(f"   ✅ Хотя бы одна сделка в плюсе — ЖДЁМ (не открываю)")
+        
+        # Сравниваем (как в веб-приложении)
+        if signal == "CALL":
+            in_loss = price_check < entry
+        else:
+            in_loss = price_check > entry
+        
+        logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={price_check:.5f} (entry={entry:.5f}) | in_loss={in_loss}")
+        
+        # Если в минусе — открываем догон
+        if in_loss:
+            logger.info(f"   ❌ Цена против нас — открываю {step+1}-ю")
+        else:
+            logger.info(f"   ✅ Цена в нашу сторону — ЖДЁМ")
             continue
         logger.info(f"   [CHECK] step={step+1}/{max_steps} | profit={profit:+.2f} | price={price_check:.5f} (entry={entry:.5f}) | in_loss_by_price={price_in_loss}")
 
