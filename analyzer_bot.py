@@ -115,6 +115,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # WAIT_CLOSE_CLIENT
 # WAIT_CLOSE_LOG
 # SIMPLE_STATS
+# COUNT_BY_IDS
+# OPEN_DEAL_STATE
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -918,7 +920,7 @@ async def get_current_price_from_forming_candle(client, pair):
         logger.debug(f"Ошибка get_candles_live для {pair}: {e}")
     return None
 
-async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0) -> Optional[dict]:
+async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, stopper, entry_price: float = 0, state=None) -> Optional[dict]:
     """
     Открывает сделку СРАЗУ.
     CHECKLIST_ALL: Добавлена двойная проверка payout прямо перед открытием.
@@ -955,6 +957,9 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
             "step": step_idx + 1,
             "payout": live_payout, # Сохраняем payout для истории
         }
+        # COUNT_BY_IDS: запоминаем ID сделки (если есть state)
+        if state is not None:
+            state.trade_ids.append(trade_id)
         dir_str = "ВВЕРХ ⬆️ (CALL)" if sig == "CALL" else "ВНИЗ ⬇️ (PUT)"
         # COLORS_FINAL: цвет открытия
         if sig == "CALL":
@@ -1146,7 +1151,7 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
                 pairs_tried = 0
             continue
 
-        deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper, entry_price)
+        deal = await _open_deal_raw(client, pair, 0, signal, steps, stopper, entry_price, state)
         if deal is None:
             # PAYOUT_FIX: при отмене (payout) — смена пары, а не зацикливание
             logger.warning(f"   ⚠ Ошибка открытия (payout?) — смена пары")
@@ -1227,7 +1232,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
     if not with_analysis:
         # === Вариант A: СРАЗУ (без анализа, без цикла) ===
         logger.info(f"   📈 2-я ступень СРАЗУ (момент минус)")
-        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price)
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
         return pair, deal
 
     # === PAYOUT_CHANGE_PAIR_SMART ===
@@ -1238,7 +1243,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
     # Если payout OK и пара не менялась — догон (pure_martingale)
     if CFG.get("pure_martingale", False) and not changed:
         logger.info(f"   📈 2-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
-        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price)
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
         return pair, deal
 
     # Иначе (пара сменилась или pure_martingale=False) — с анализом
@@ -1310,7 +1315,7 @@ async def _open_step_2(client, pair: str, signal: str, steps: list, stopper,
             continue
 
         # Открыть
-        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry)
+        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry, state)
         if deal is None:
             # PAYOUT_FIX: при отмене (payout) — смена пары
             logger.warning(f"   ⚠️ Ошибка открытия 2-й (payout?) — смена пары")
@@ -1854,6 +1859,8 @@ class TraderState:
         self.pair_stats = {}
         self.hour_stats = {}
         self.last_delta = 0.0
+        # COUNT_BY_IDS: ID всех сделок бота
+        self.trade_ids = []
         self.last_steps = []
         # === DOUBLE MARTINGALE ===
         self.double_mode_active = False
@@ -1918,8 +1925,8 @@ class TraderState:
         try:
             closed = await client.closed_deals()
             if closed:
-                # Фильтруем по openTimestamp (время открытия)
-                recent = [d for d in closed if d.get("openTimestamp", 0) >= start_time]
+                # COUNT_BY_IDS: фильтруем только сделки бота (по ID)
+                recent = [d for d in closed if d.get("id") in self.trade_ids]
                 if recent:
                     self.total_trades = len(recent)
                     self.win_trades = sum(1 for d in recent if float(str(d.get("profit", "0")).replace("+", "").replace(",", ".")) > 0)
