@@ -105,6 +105,9 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CHECK_ALL_DEALS
 # PRICE_ONLY
 # FIX_PROFIT_ERROR
+# CLOSED_DEALS
+# CLOSED_DEALS_ON_STOP
+# STOP_FLAG_FIX
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1868,6 +1871,33 @@ class TraderState:
         else:
             self.loss_trades += 1
 
+    async def update_trade_stats_on_stop(self, client, start_time: float):
+        """CLOSED_DEALS_ON_STOP: обновляем статистику только за время работы."""
+        try:
+            closed = await client.get_closed_deals()
+            if closed:
+                # Фильтруем только сделки, закрытые после start_time
+                recent = [d for d in closed if d.get("close_time", 0) >= start_time]
+                if recent:
+                    self.total_trades = len(recent)
+                    self.win_trades = sum(1 for d in recent if d.get("profit", 0) > 0)
+                    self.loss_trades = sum(1 for d in recent if d.get("profit", 0) < 0)
+                    logger.info(f"📊 Статистика за время работы: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})")
+        except Exception as e:
+            logger.debug(f"Ошибка update_trade_stats_on_stop: {e}")
+
+    async def update_trade_stats(self, client):
+        """CLOSED_DEALS: обновляем статистику по закрытым сделкам."""
+        try:
+            closed = await client.get_closed_deals()
+            if closed:
+                self.total_trades = len(closed)
+                self.win_trades = sum(1 for d in closed if d.get("profit", 0) > 0)
+                self.loss_trades = sum(1 for d in closed if d.get("profit", 0) < 0)
+                logger.info(f"📊 Обновлена статистика сделок: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})")
+        except Exception as e:
+            logger.debug(f"Ошибка update_trade_stats: {e}")
+
     def on_win(self):
         self._record_stats(True)
         self.skip_streak = 0
@@ -2513,6 +2543,11 @@ class Trader:
                 await asyncio.sleep(10)
                 continue
             except KeyboardInterrupt:
+                if self.state:
+                    # CLOSED_DEALS_ON_STOP: обновляем статистику за время работы
+                    await self.state.update_trade_stats_on_stop(client, self.start_time)
+                    logger.info(self.state.summary())
+                    print(self.state.summary())
                 return
 
     async def _run_with_client(self, client):
@@ -2573,6 +2608,9 @@ class Trader:
 
             try:
                 if self.stopper.requested():
+                    # STOP_FLAG_FIX: обновляем статистику за время работы
+                    if self.state:
+                        await self.state.update_trade_stats_on_stop(client, self.start_time)
                     break
 
                  # === ПРОВЕРКА ПРОСАДКИ ===
@@ -2635,6 +2673,10 @@ class Trader:
                             )
                 except Exception as e:
                     logger.debug(f"Ошибка проверки просадки: {e}")
+
+                # === CLOSED_DEALS: обновляем статистику сделок каждые 5 мин ===
+                if time.time() - self.last_status_show >= 300:
+                    await self.state.update_trade_stats(client)
 
                 # === ПОКАЗ REF/BAL КАЖДЫЕ 5 МИН ===
                 if time.time() - self.last_status_show >= 300:
