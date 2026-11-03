@@ -113,6 +113,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # WAIT_CLOSE_STATE_V2
 # CHECK_WIN_LOG
 # WAIT_CLOSE_CLIENT
+# WAIT_CLOSE_LOG
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -984,12 +985,15 @@ async def check_win_safe(client, trade_id: str) -> Optional[dict]:
 async def _wait_close(deal: dict, stopper, state=None, client=None):
     """
     Ждёт закрытия сделки (expiration + 5 сек запас).
-    CHECK_WIN_V2: после закрытия — check_win(trade_id) и запись в state.
+    WAIT_CLOSE_LOG: логирование state, client, trade_id.
     """
     last_open_time = deal["open_time"]
     remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
     logger.info(f"⏳ Ждём закрытия сделки #{deal['step']} (~{remaining:.0f} сек)...")
     await stopper.sleep(remaining)
+
+    # WAIT_CLOSE_LOG: логируем, что пришло
+    logger.info(f"   [WAIT_CLOSE] state={state is not None}, client={client is not None}, trade_id={deal.get('id')}")
 
     # CHECK_WIN_V2: получаем результат через check_win
     if state is not None:
@@ -1002,8 +1006,14 @@ async def _wait_close(deal: dict, stopper, state=None, client=None):
                     profit = result.get("profit", 0)
                     state.record_trade(is_win)
                     logger.info(f"🏁 Сделка #{deal['step']} закрыта: {'✅ WIN' if is_win else '❌ LOSS'} (profit={profit})")
+                else:
+                    logger.warning(f"   ⚠ check_win вернул None для {trade_id}")
+            else:
+                logger.warning(f"   ⚠ trade_id пустой (deal={deal})")
         except Exception as e:
-            logger.debug(f"Ошибка check_win: {e}")
+            logger.warning(f"   ⚠ Ошибка check_win: {e}")
+    else:
+        logger.warning(f"   ⚠ state is None — check_win не вызывается")
 
 async def _check_first_30s(client, pair: str, signal: str, entry_price: float):
     """
