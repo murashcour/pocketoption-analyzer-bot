@@ -112,6 +112,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CHECK_WIN_V2
 # WAIT_CLOSE_STATE_V2
 # CHECK_WIN_LOG
+# WAIT_CLOSE_CLIENT
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -980,7 +981,7 @@ async def check_win_safe(client, trade_id: str) -> Optional[dict]:
         logger.warning(f"   [CHECK_WIN] {trade_id}: ERROR {e}")
         return None
 
-async def _wait_close(deal: dict, stopper, state=None):
+async def _wait_close(deal: dict, stopper, state=None, client=None):
     """
     Ждёт закрытия сделки (expiration + 5 сек запас).
     CHECK_WIN_V2: после закрытия — check_win(trade_id) и запись в state.
@@ -995,7 +996,7 @@ async def _wait_close(deal: dict, stopper, state=None):
         try:
             trade_id = deal.get("id")
             if trade_id:
-                result = await check_win_safe(client, trade_id)
+                result = await check_win_safe(client, trade_id) if client else None
                 if result:
                     is_win = result.get("result") == "win"
                     profit = result.get("profit", 0)
@@ -1605,7 +1606,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
 
     # Ждём закрытия последней сделки
     if deals:
-        await _wait_close(deals[-1], stopper, state)
+        await _wait_close(deals[-1], stopper, state, client)
 
     try:
         B_final = await _safe_get_balance(client)
@@ -1670,7 +1671,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
 
     # ===== ШАГ 2: Ждём закрытия 1-й =====
     logger.info(f"⏳ Ждём закрытия 1-й ступени...")
-    await _wait_close(deal_1, stopper, state)
+    await _wait_close(deal_1, stopper, state, client)
 
     if stopper.requested():
         logger.warning("⏹ Остановка во время серии")
@@ -1711,7 +1712,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         return False
 
     # ===== ШАГ 3: Ждём закрытия 2-й =====
-    await _wait_close(deal_2, stopper, state)
+    await _wait_close(deal_2, stopper, state, client)
 
     try:
         B_after_2 = float(await client.balance())
@@ -1751,7 +1752,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.info(f"❌ 3-я не открыта — серия закрыта")
         return False
 
-    await _wait_close(deal_3, stopper, state)
+    await _wait_close(deal_3, stopper, state, client)
 
     try:
         B_after_3 = float(await client.balance())
@@ -1786,7 +1787,7 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         logger.info(f"❌ 4-я не открыта — серия закрыта")
         return False
 
-    await _wait_close(deal_4, stopper, state)
+    await _wait_close(deal_4, stopper, state, client)
 
     try:
         B_final = float(await client.balance())
@@ -2459,7 +2460,7 @@ async def run_manual_mode(client, state, stopper, mode):
                                 input, "   Ждать закрытия? [Enter=да / n=нет]: "
                             )
                             if ans.strip().lower() not in ("n", "no", "н", "нет"):
-                                await _wait_close(deal, stopper, state)
+                                await _wait_close(deal, stopper, state, client)
                     elif ans == "s":
                         state.change_pair("ручной: смена пары")
                         continue
