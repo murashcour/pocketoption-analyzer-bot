@@ -114,6 +114,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CHECK_WIN_LOG
 # WAIT_CLOSE_CLIENT
 # WAIT_CLOSE_LOG
+# SIMPLE_STATS
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1913,16 +1914,16 @@ class TraderState:
             self.loss_trades += 1
 
     async def update_trade_stats_on_stop(self, client, start_time: float):
-        """CLOSED_DEALS_ON_STOP: обновляем статистику только за время работы."""
+        """SIMPLE_STATS: простой подсчет сделок за время работы (через closed_deals)."""
         try:
             closed = await client.closed_deals()
             if closed:
-                # Фильтруем только сделки, закрытые после start_time
-                recent = [d for d in closed if d.get("close_time", 0) >= start_time]
+                # Фильтруем по openTimestamp (время открытия)
+                recent = [d for d in closed if d.get("openTimestamp", 0) >= start_time]
                 if recent:
                     self.total_trades = len(recent)
-                    self.win_trades = sum(1 for d in recent if d.get("profit", 0) > 0)
-                    self.loss_trades = sum(1 for d in recent if d.get("profit", 0) < 0)
+                    self.win_trades = sum(1 for d in recent if float(str(d.get("profit", "0")).replace("+", "").replace(",", ".")) > 0)
+                    self.loss_trades = sum(1 for d in recent if float(str(d.get("profit", "0")).replace("+", "").replace(",", ".")) < 0)
                     logger.info(f"📊 Статистика за время работы: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})")
         except Exception as e:
             logger.debug(f"Ошибка update_trade_stats_on_stop: {e}")
