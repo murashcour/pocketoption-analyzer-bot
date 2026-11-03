@@ -111,6 +111,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CLOSED_DEALS_V2
 # CHECK_WIN_V2
 # WAIT_CLOSE_STATE_V2
+# CHECK_WIN_LOG
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -970,12 +971,13 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
 
 
 async def check_win_safe(client, trade_id: str) -> Optional[dict]:
-    """CHECK_WIN_V2: безопасный вызов check_win (с таймаутом)."""
+    """CHECK_WIN_LOG: безопасный вызов check_win (с логированием)."""
     try:
         result = await asyncio.wait_for(client.check_win(trade_id), timeout=5.0)
+        logger.info(f"   [CHECK_WIN] {trade_id}: {result}")
         return result
     except Exception as e:
-        logger.debug(f"check_win({trade_id}): {e}")
+        logger.warning(f"   [CHECK_WIN] {trade_id}: ERROR {e}")
         return None
 
 async def _wait_close(deal: dict, stopper, state=None):
