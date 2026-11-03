@@ -102,6 +102,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # DOUBLE_CHECK
 # PREV_ENTRY_V2
 # TRADE_WINRATE
+# CHECK_ALL_DEALS
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1524,40 +1525,35 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             logger.warning(f"   ⚠ Ошибка get_opened_deals: {e} — пропускаю шаг")
             continue
 
-        # Ищем нашу последнюю сделку по ID
-        last_trade_id = trade_ids[-1]
-        last_deal_info = None
+        # CHECK_ALL_DEALS: собираем ВСЕ наши открытые сделки
+        our_deals = []
         for d in opened:
-            if d.get("id") == last_trade_id:
-                last_deal_info = d
-                break
+            if d.get("id") in trade_ids:
+                our_deals.append(d)
 
-        if last_deal_info is None:
-            logger.warning(f"   ⚠ Сделка {last_trade_id} не найдена в opened — возможно, закрыта. Пропускаю.")
+        if not our_deals:
+            logger.warning(f"   ⚠ Ни одна сделка не найдена в opened — возможно, закрыты. Пропускаю.")
             continue
 
-        # PROFIT_FLOAT: приводим profit к float (может быть строкой)
-        # DOUBLE_CHECK: проверяем и профит, и цену
-        profit_raw = last_deal_info.get("profit", 0)
-        try:
-            profit = float(str(profit_raw).replace("+", "").replace(",", "."))
-        except (ValueError, TypeError):
-            profit = 0.0
-        
-        # Получаем цену (для перекрестной проверки)
-        price_check = await get_current_price(client, pair)
-        if price_check is None:
-            price_check = await get_current_price_from_forming_candle(client, pair)
-        
-        # Сравниваем с ценой входа (как в веб-приложении)
-        entry = last_deal_info.get("entry", entry_price)
-        price_in_loss = False
-        if price_check is not None:
-            if signal == "CALL":
-                price_in_loss = price_check < entry
+        # Проверяем, есть ли ХОТЯ БЫ ОДНА в плюсе
+        any_in_profit = False
+        for d in our_deals:
+            profit_raw = d.get("profit", 0)
+            try:
+                profit = float(str(profit_raw).replace("+", "").replace(",", "."))
+            except (ValueError, TypeError):
+                profit = 0.0
+            
+            if profit >= 0:
+                any_in_profit = True
+                logger.info(f"   [CHECK] Сделка {str(d.get('id'))[:8]}... profit={profit:+.2f} — В ПЛЮСЕ")
             else:
-                price_in_loss = price_check > entry
-        
+                logger.info(f"   [CHECK] Сделка {str(d.get('id'))[:8]}... profit={profit:+.2f} — В МИНУСЕ")
+
+        # Если хотя бы одна в плюсе — НЕ открываем догон
+        if any_in_profit:
+            logger.info(f"   ✅ Хотя бы одна сделка в плюсе — ЖДЁМ (не открываю)")
+            continue
         logger.info(f"   [CHECK] step={step+1}/{max_steps} | profit={profit:+.2f} | price={price_check:.5f} (entry={entry:.5f}) | in_loss_by_price={price_in_loss}")
 
         # Если хотя бы один источник говорит "минус" — открываем догон
