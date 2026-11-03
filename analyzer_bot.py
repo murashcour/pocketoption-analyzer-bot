@@ -108,6 +108,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # CLOSED_DEALS
 # CLOSED_DEALS_ON_STOP
 # STOP_FLAG_FIX
+# CLOSED_DEALS_V2
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1874,7 +1875,7 @@ class TraderState:
     async def update_trade_stats_on_stop(self, client, start_time: float):
         """CLOSED_DEALS_ON_STOP: обновляем статистику только за время работы."""
         try:
-            closed = await client.get_closed_deals()
+            closed = await client.closed_deals()
             if closed:
                 # Фильтруем только сделки, закрытые после start_time
                 recent = [d for d in closed if d.get("close_time", 0) >= start_time]
@@ -1889,7 +1890,7 @@ class TraderState:
     async def update_trade_stats(self, client):
         """CLOSED_DEALS: обновляем статистику по закрытым сделкам."""
         try:
-            closed = await client.get_closed_deals()
+            closed = await client.closed_deals()
             if closed:
                 self.total_trades = len(closed)
                 self.win_trades = sum(1 for d in closed if d.get("profit", 0) > 0)
