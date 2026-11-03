@@ -104,6 +104,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # TRADE_WINRATE
 # CHECK_ALL_DEALS
 # PRICE_ONLY
+# FIX_PROFIT_ERROR
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1553,11 +1554,11 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         else:
             logger.info(f"   ✅ Цена в нашу сторону — ЖДЁМ")
             continue
-        logger.info(f"   [CHECK] step={step+1}/{max_steps} | profit={profit:+.2f} | price={price_check:.5f} (entry={entry:.5f}) | in_loss_by_price={price_in_loss}")
+        logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={price_check:.5f} (entry={entry:.5f}) | in_loss={in_loss}")
 
         # Если хотя бы один источник говорит "минус" — открываем догон
-        if profit < 0 or price_in_loss:
-            logger.info(f"   ❌ Минус (profit={profit:+.2f}, price_in_loss={price_in_loss}) — открываю {step+1}-ю")
+        if in_loss:
+            logger.info(f"   ❌ Цена против нас — открываю {step+1}-ю")
             new_entry = price_check if price_check is not None else entry_price
             new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, new_entry)
             if new_deal is None:
@@ -1567,7 +1568,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             trade_ids.append(new_deal["id"])
             logger.info(f"   📈 [{step+1}/{max_steps}] Открыл ${bet:.2f} {direction_str}")
         else:
-            logger.info(f"   ✅ Профит {profit:+.2f} >= 0 — ЖДЁМ (в плюсе)")
+            logger.info(f"   ✅ Цена в нашу сторону — ЖДЁМ")
 
     # Ждём закрытия последней сделки
     if deals:
