@@ -119,6 +119,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # OPEN_DEAL_STATE
 # STRICT_CHECK
 # BET_PERCENT
+# TOTAL_TRADES_FIX
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1934,9 +1935,10 @@ class TraderState:
                 # COUNT_BY_IDS: фильтруем только сделки бота (по ID)
                 recent = [d for d in closed if d.get("id") in self.trade_ids]
                 if recent:
-                    self.total_trades = len(recent)
+                    # TOTAL_TRADES_FIX: total = win + loss (только закрытые)
                     self.win_trades = sum(1 for d in recent if float(str(d.get("profit", "0")).replace("+", "").replace(",", ".")) > 0)
                     self.loss_trades = sum(1 for d in recent if float(str(d.get("profit", "0")).replace("+", "").replace(",", ".")) < 0)
+                    self.total_trades = self.win_trades + self.loss_trades
                     logger.info(f"📊 Статистика за время работы: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})")
         except Exception as e:
             logger.debug(f"Ошибка update_trade_stats_on_stop: {e}")
