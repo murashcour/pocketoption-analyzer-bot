@@ -120,6 +120,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # STRICT_CHECK
 # BET_PERCENT
 # TOTAL_TRADES_FIX
+# STATS_INSIDE_ASYNC
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -2601,8 +2602,7 @@ class Trader:
                 continue
             except KeyboardInterrupt:
                 if self.state:
-                    # CLOSED_DEALS_ON_STOP: обновляем статистику за время работы
-                    await self.state.update_trade_stats_on_stop(client, self.start_time)
+                    # STATS_INSIDE_ASYNC: статистика уже обновлена внутри _run_with_client
                     logger.info(self.state.summary())
                     print(self.state.summary())
                 return
@@ -2892,7 +2892,9 @@ class Trader:
                     logger.error("⏹ Требуется перезапуск")
                     return
 
+        # STATS_INSIDE_ASYNC: обновляем статистику перед выходом (client ещё доступен)
         if self.state:
+            await self.state.update_trade_stats_on_stop(client, self.start_time)
             print("\n" + "=" * 60)
             print(self.state.summary())
             print("=" * 60)
