@@ -122,6 +122,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # TOTAL_TRADES_FIX
 # STATS_INSIDE_ASYNC
 # MENU_ADD
+# WAIT_FOR_PRICE
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1591,9 +1592,18 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         entry = last_deal["entry"]
         
         # Получаем текущую цену
-        price_check = await get_current_price(client, pair)
+        # WAIT_FOR_PRICE: таймаут 2-3 сек на get_current_price
+        try:
+            price_check = await asyncio.wait_for(get_current_price(client, pair), timeout=3.0)
+        except asyncio.TimeoutError:
+            logger.warning("   ⚠ Таймаут get_current_price (3 сек)")
+            price_check = None
         if price_check is None:
-            price_check = await get_current_price_from_forming_candle(client, pair)
+            try:
+                price_check = await asyncio.wait_for(get_current_price_from_forming_candle(client, pair), timeout=3.0)
+            except asyncio.TimeoutError:
+                logger.warning("   ⚠ Таймаут forming (3 сек)")
+                price_check = None
         
         if price_check is None:
             logger.warning(f"   ⚠ Цена не получена — пропускаю шаг")
