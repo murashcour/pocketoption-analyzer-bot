@@ -156,6 +156,25 @@ If ATR < 0.1% of price — market is flat, trade is skipped.
 | tf_10m_overbought | 75 | RSI 10m — overbought |
 | tf_10m_oversold | 25 | RSI 10m — oversold |
 
+## Averaging
+
+| Parameter | Default | Description |
+|---|---|---|
+| averaging_enabled | True | Enable averaging (no martingale) |
+| averaging_step_sec | 10 | Step between trades (sec) |
+| averaging_max_steps | 4 | Max trades in series |
+| averaging_threshold_pct | 0.05 | Threshold for chase (%) — noise protection |
+| wait_candle_start_enabled | False | Wait for 1m candle start for entry |
+
+**Logic:** 1st trade opens by signal. 2nd, 3rd, 4th — only if price moved against us more than `averaging_threshold_pct` (compared to last deal). Fixed bet (1% of balance), no doubling.
+
+## History filter (pair_stats)
+
+| Parameter | Default | Description |
+|---|---|---|
+| pair_stats_enabled | True | Enable history filter |
+| pair_stats_min_winrate | 50.0 | Min pair Winrate (%) |
+| history_window_hours | 48 | History window (hours) |
 ## Skip management
 
 | Parameter | Default | Description |

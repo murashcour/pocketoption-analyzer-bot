@@ -175,6 +175,9 @@ Should show a path inside venv.
     pip install --upgrade pip
     pip install -r requirements.txt
 
+# Установка tvkit (для Real-пар)
+pip install tvkit
+
 Main dependency — BinaryOptionsToolsV2.
 
 ## Step 5. SSID token
@@ -245,6 +248,9 @@ If repository has new changes:
     cd ~/bot
     git pull
     pip install -r requirements.txt
+
+# Установка tvkit (для Real-пар)
+pip install tvkit
 
 Restart:
 

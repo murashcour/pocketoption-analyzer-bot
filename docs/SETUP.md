@@ -175,6 +175,9 @@
     pip install --upgrade pip
     pip install -r requirements.txt
 
+# Установка tvkit (для Real-пар)
+pip install tvkit
+
 Основная зависимость — BinaryOptionsToolsV2.
 
 ## Шаг 5. SSID токен
@@ -245,6 +248,9 @@ SSID — токен авторизации в PocketOption. Подробнее �
     cd ~/bot
     git pull
     pip install -r requirements.txt
+
+# Установка tvkit (для Real-пар)
+pip install tvkit
 
 Перезапустить:
 
