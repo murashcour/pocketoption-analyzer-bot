@@ -117,6 +117,8 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # SIMPLE_STATS
 # COUNT_BY_IDS
 # OPEN_DEAL_STATE
+# STRICT_CHECK
+# BET_PERCENT
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -1536,7 +1538,11 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         logger.error(f"Не удалось получить баланс: {e}")
         return False
 
-    bet = 1.0
+    # BET_PERCENT: ставка = 1% от баланса (как в мартингейле)
+    steps_calc = get_martingale_steps(B_start)
+    bet = steps_calc[0] if steps_calc else 1.0
+    logger.info(f"   Ставка (1% от ${B_start:.2f}): ${bet:.2f}")
+    
     step_sec = CFG.get("averaging_step_sec", 10)
     max_steps = CFG.get("averaging_max_steps", 4)
     direction_str = "ВВЕРХ ⬆ (CALL)" if signal == "CALL" else "ВНИЗ ⬇ (PUT)"
