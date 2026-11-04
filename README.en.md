@@ -4,7 +4,7 @@
 
 Automated trading bot for PocketOption (demo/live account).
 Analyzes OTC and Real currency pairs, generates signals, and trades
-using a martingale strategy within each series.
+using an averaging strategy within each series.
 
 ## Important
 
@@ -24,7 +24,7 @@ at your own risk. The author is not responsible for financial losses.
 - 🎯 Indicators: SMA14, EMA20, EMA50, RSI14
 - 📈 Filters: S/R levels, ATR (volatility), candlestick patterns
 - 🌍 Real pairs (Currency / Forex): OTC + real currency pairs
-- 💰 Martingale: up to 4 steps (1% -> 2% -> 4% -> 8%)
+- 💰 Averaging: up to 4 trades of 1% balance (no doubling)
 - 🔄 Pair rotation: switch on skips or losing series
 - 💹 Payout filter: OTC [90, 95]%, Real [85, 92]%
 - 🔍 Payout check before steps 2/3/4: if payout drops — change pair
@@ -37,6 +37,30 @@ at your own risk. The author is not responsible for financial losses.
 - 🖥️ Runs in screen: survives SSH disconnection
 - 🎮 Manual analyzer mode (`--show-only` / `--confirm`)
 
+## Real pairs (Forex)
+
+The bot supports **Real pairs** (Forex), which trade **Mon-Fri** (closed on weekends).
+
+### How to enable:
+- In `config.json` (or menu) set `include_real: true`.
+- The bot **automatically downloads** Real pairs history (via `tvkit`).
+- Real pairs are **filtered** by payout (85-92%) and by history (`pair_stats`).
+
+### How to download history:
+```
+python download_history.py
+```
+(Downloads OTC pairs via PocketOption API, Real pairs via TradingView/OANDA).
+
+### How to update stats:
+```
+python update_stats.py
+```
+(Merges `history/` and `history_real/` into `pair_stats.json`).
+
+### Requirements:
+- **`tvkit`** (install via `pip install tvkit`).
+- **SSID** (for OTC pairs, as usual).
 ## Requirements
 
 - **Debian-based server:**
@@ -130,16 +154,12 @@ Hard (immediately):
 8. **After win** — stay on pair, limit 3 skips
 9. **After loss** — switch pair, limit 2 skips
 
-### Martingale (4 steps)
+### Averaging (up to 4 trades)
 
-- **1st** — full analysis, entry at 1m candle start
-- **2nd** — chase by original signal (`pure_martingale: true`, 0 sec).
-  If payout of original pair dropped — change pair + analysis for new.
-- **3rd** — with analysis (check, may change direction/pair)
-- **4th** — with analysis (check)
-
-**Payout check** before 2/3/4: if payout out of range — change pair
-until good payout found. Series is not closed, continues on new pair.
+- **1st** — full analysis, entry immediately after signal (if `wait_candle_start_enabled=false`).
+- **2nd, 3rd, 4th** — opened every `averaging_step_sec` (default 10 sec), **only if** price moved against us (compared to **last** deal entry). Fixed bet ($1 or 1% of balance), no doubling.
+- If price moves in our favor — **do not open** (wait for close).
+- Result check — via `check_win` (exact result from API).
 
 ### Protection
 
