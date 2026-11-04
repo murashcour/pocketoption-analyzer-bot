@@ -1,3 +1,5 @@
 BinaryOptionsToolsV2>=0.2.15
 pytz
 requests
+
+tvkit>=0.18.0

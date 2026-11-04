@@ -36,6 +36,31 @@
 - 🖥️ Работа через screen: не теряется при обрыве SSH
 - 🎮 Ручной режим анализатора (`--show-only` / `--confirm`)
 
+## Real-пары (Forex)
+
+Бот поддерживает **Real-пары** (Forex), которые торгуются **Пн-Пт** (выходные — закрыты).
+
+### Как включить:
+- В `config.json` (или меню) установить `include_real: true`.
+- Бот автоматически **скачает** историю Real-пар (через `tvkit`).
+- Real-пары **фильтруются** по payout (85-92%) и по истории (`pair_stats`).
+
+### Как скачать историю:
+```
+python download_history.py
+```
+(Скачивает OTC-пары через PocketOption API, Real-пары — через TradingView/OANDA).
+
+### Как обновить статистику:
+```
+python update_stats.py
+```
+(Объединяет `history/` и `history_real/` в `pair_stats.json`).
+
+### Требования:
+- **`tvkit`** (устанавливается через `pip install tvkit`).
+- **SSID** (для OTC-пар, как обычно).
+
 ## Требования
 
 - **Debian-based сервер:**
