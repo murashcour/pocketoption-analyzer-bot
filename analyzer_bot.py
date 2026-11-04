@@ -121,6 +121,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # BET_PERCENT
 # TOTAL_TRADES_FIX
 # STATS_INSIDE_ASYNC
+# MENU_ADD
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
@@ -2962,6 +2963,8 @@ MENU_FIELDS = [
     ("averaging_enabled",         "Усреднение (True/False)",              "Averaging enabled (True/False)"),
     ("averaging_step_sec",        "Усреднение: шаг (сек)",                "Averaging: step (sec)"),
     ("averaging_max_steps",       "Усреднение: макс. ступеней",           "Averaging: max steps"),
+    ("averaging_threshold_pct",   "Усреднение: порог догона (%)",         "Averaging: threshold (%)"),
+    ("wait_candle_start_enabled", "Ждать начала свечи (True/False)",      "Wait candle start (True/False)"),
 ]
 
 def _format_value(val) -> str:
