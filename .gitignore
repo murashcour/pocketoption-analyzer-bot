@@ -61,3 +61,11 @@ history/
 pair_stats.json
 analyzer_bot.log
 test_filters.py
+test_*.py
+*.bak_*
+history_real/
+atch_hysteresis.p
+download_real_history.py
+run_averaging_series
+table
+h origin stable --force
