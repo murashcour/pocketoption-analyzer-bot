@@ -1982,12 +1982,18 @@ class TraderState:
                 logger.info("📊 Статистика: closed_deals пуст")
                 return
 
-            # PATCH_009: фильтруем по closeTimestamp >= start_timestamp
-            if self.start_timestamp > 0:
-                recent = [d for d in closed
-                          if d.get("closeTimestamp", 0) >= self.start_timestamp]
-            else:
-                recent = closed
+            # PATCH_018: если start_timestamp == 0 -> устанавливаем сейчас
+            if self.start_timestamp <= 0:
+                self.start_timestamp = time.time()
+                logger.info(f"⚠ PATCH_018: start_timestamp был 0.0 -> {self.start_timestamp:.0f}")
+
+            # PATCH_009/018: фильтруем по closeTimestamp >= start_timestamp
+            recent = [d for d in closed
+                      if d.get("closeTimestamp", 0) >= self.start_timestamp]
+
+            # PATCH_018: лог для отладки
+            if recent:
+                logger.debug(f"PATCH_018: start={self.start_timestamp:.0f}, first_close={recent[0].get('closeTimestamp')}")
 
             if not recent:
                 logger.info(f"📊 Статистика: closed_deals={len(closed)}, но recent=0 (closeTimestamp < start={self.start_timestamp})")
