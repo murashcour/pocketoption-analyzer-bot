@@ -2823,9 +2823,12 @@ class Trader:
 
                 # PATCH_001: update_trade_stats удалён (брал все closed_deals без фильтра)
 
-                # === PATCH_006: HUD-карточка каждые 5 мин ===
+                # === PATCH_006/010: HUD-карточка каждые 5 мин ===
                 if time.time() - self.last_status_show >= 300:
                     try:
+                        # PATCH_010: обновляем статистику из closed_deals ПЕРЕД HUD
+                        await self.state.update_trade_stats_from_closed(client)
+
                         _bal_now = float(await client.balance())
                         _threshold = self.reference_balance * (
                             1 - CFG["max_drawdown_percent"] / 100
