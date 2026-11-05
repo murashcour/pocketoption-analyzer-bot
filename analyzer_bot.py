@@ -36,6 +36,14 @@ from typing import Optional, List, Tuple
 
 from BinaryOptionsToolsV2 import PocketOptionAsync, PocketOptionError
 
+# PATCH_006: HUD-карточка
+try:
+    from hud import print_hud
+    HUD_AVAILABLE = True
+except ImportError:
+    HUD_AVAILABLE = False
+    print_hud = None
+
 # ==================== ПУТИ ====================
 # ==================== PATHS ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2784,7 +2792,7 @@ class Trader:
 
                 # PATCH_001: update_trade_stats удалён (брал все closed_deals без фильтра)
 
-                # === ПОКАЗ REF/BAL КАЖДЫЕ 5 МИН ===
+                # === PATCH_006: HUD-карточка каждые 5 мин ===
                 if time.time() - self.last_status_show >= 300:
                     try:
                         _bal_now = float(await client.balance())
@@ -2792,15 +2800,27 @@ class Trader:
                             1 - CFG["max_drawdown_percent"] / 100
                         )
                         _next_ref = get_next_reference_step(self.reference_balance)
-                        _msg = (
-                            f"💰 Ref: ${self.reference_balance:.0f} | "
-                            f"Баланс: ${_bal_now:.2f} | "
-                            f"Просадка: ${_threshold:.0f} | "
-                            f"Следующая: ${_next_ref:.0f}"
-                        )
-                        logger.info(_msg)
-                        # Синий цвет в консоль
-                        print(f"\033[94m{_msg}\033[0m")
+
+                        # PATCH_006: HUD-карточка в консоль
+                        if HUD_AVAILABLE and print_hud is not None:
+                            print_hud(
+                                state=self.state,
+                                balance=_bal_now,
+                                ref_balance=self.reference_balance,
+                                drawdown_threshold=_threshold,
+                                next_ref=_next_ref,
+                                double_mode=getattr(self.state, "double_mode_active", False),
+                            )
+                        else:
+                            # Fallback: старый вывод
+                            _msg = (
+                                f"💰 Ref: ${self.reference_balance:.0f} | "
+                                f"Баланс: ${_bal_now:.2f} | "
+                                f"Просадка: ${_threshold:.0f} | "
+                                f"Следующая: ${_next_ref:.0f}"
+                            )
+                            logger.info(_msg)
+                            print(f"\033[94m{_msg}\033[0m")
                     except Exception as e:
                         logger.debug(f"Ошибка показа REF/BAL: {e}")
                     self.last_status_show = time.time()
