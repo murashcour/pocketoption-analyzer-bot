@@ -2671,10 +2671,11 @@ class Trader:
         self.double_pnl_start = 0.0
 
     async def _hud_updater(self, client):
-        """PATCH_014/015: обновляет hud.json каждые 10 секунд (статистика из closed_deals)."""
+        """PATCH_014/015/017: обновляет hud.json каждые 10 секунд."""
+        logger.info("PATCH_017: _hud_updater запущен")
         while not self.stopper.requested():
             try:
-                # PATCH_015: обновляем статистику из closed_deals (свежие данные)
+                # PATCH_015: обновляем статистику из closed_deals
                 await self.state.update_trade_stats_from_closed(client)
 
                 _bal_now = float(await client.balance())
@@ -2692,9 +2693,13 @@ class Trader:
                         next_ref=_next_ref,
                         double_mode=getattr(self.state, "double_mode_active", False),
                     )
+                    logger.info(f"PATCH_017: hud.json обновлён (balance={_bal_now:.2f})")
+                else:
+                    logger.warning(f"PATCH_017: save_hud_to_json недоступен (HUD_AVAILABLE={HUD_AVAILABLE})")
             except Exception as e:
-                logger.debug(f"hud_updater: {e}")
+                logger.error(f"PATCH_017: hud_updater ERROR: {e}")
             await asyncio.sleep(10)  # каждые 10 секунд
+        logger.info("PATCH_017: _hud_updater остановлен")
 
     async def run(self):
         """Внешний цикл реконнекта при потере соединения."""
@@ -2752,8 +2757,19 @@ class Trader:
         # PATCH_009: запоминаем время старта
         self.state.start_timestamp = time.time()
         logger.info(f"⏱ Статистика: start_timestamp={self.state.start_timestamp:.0f}")
-        # PATCH_014: запускаем HUD-updater (каждые 10 сек)
-        asyncio.create_task(self._hud_updater(client))
+        # PATCH_014/017: запускаем HUD-updater (каждые 10 сек)
+        _hud_task = asyncio.create_task(self._hud_updater(client))
+        logger.info(f"PATCH_017: _hud_updater создан (task={_hud_task})")
+
+        def _hud_done(task):
+            if task.cancelled():
+                logger.warning("PATCH_017: _hud_updater отменён")
+            elif task.exception():
+                logger.error(f"PATCH_017: _hud_updater упал: {task.exception()}")
+            else:
+                logger.info("PATCH_017: _hud_updater завершён")
+
+        _hud_task.add_done_callback(_hud_done)
 
         # === РУЧНОЙ РЕЖИМ ===
         if self.manual_mode:
