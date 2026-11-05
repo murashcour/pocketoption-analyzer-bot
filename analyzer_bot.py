@@ -376,14 +376,27 @@ def get_time(c):
 
 
 async def fetch_candles(client, asset: str, period: int, count: int) -> List:
-    """Получить N свечей через get_candles."""
+    """PATCH_004: get_candles_live (если доступен) с fallback на get_candles."""
+    # Пробуем get_candles_live (не deprecated)
+    try:
+        if hasattr(client, "get_candles_live"):
+            result = []
+            async for closed, forming in client.get_candles_live(asset, period, count):
+                if isinstance(closed, list):
+                    result.extend(closed)
+                if isinstance(forming, dict):
+                    result.append(forming)
+                if len(result) >= count:
+                    break
+            if result:
+                return result[:count]
+    except Exception as e:
+        logger.debug(f"get_candles_live({asset}, {period}): {e}")
+
+    # Fallback: get_candles (deprecated, но работает)
     try:
         result = await client.get_candles(asset, period, count)
         if isinstance(result, (list, tuple)) and len(result) > 0:
-            # LIVE_CANDLES_FIX: get_candles отдает только закрытые свечи.
-            # Нам нужно добавить текущую формирующуюся свечу, чтобы видеть цену в реальном времени.
-            # Но так как API запаздывает, мы просто возвращаем список как есть, 
-            # НО в full_analysis мы будем брать цену через get_current_price.
             return list(result)
     except Exception as e:
         logger.debug(f"get_candles({asset}, {period}): {e}")
@@ -405,7 +418,8 @@ async def _safe_get_balance(client, max_retries=3, delay=5):
 
 
 async def get_current_price(client, pair: str) -> Optional[float]:
-    """Цена закрытия текущей свечи через get_candles_live."""
+    """PATCH_004: цена из forming (get_candles_live) с fallback на закрытую свечу."""
+    # Пробуем forming (быстро, но может таймаутить)
     try:
         async for closed, forming in client.get_candles_live(pair, 60, 100):
             if isinstance(forming, dict) and "close" in forming:
@@ -413,6 +427,14 @@ async def get_current_price(client, pair: str) -> Optional[float]:
             break
     except Exception as e:
         logger.debug(f"get_candles_live ошибка: {e}")
+
+    # Fallback: закрытая свеча (get_candles, запаздывает на 1 мин, но точная)
+    try:
+        candles = await client.get_candles(pair, 60, 2)
+        if candles and len(candles) >= 1:
+            return get_close(candles[-1])
+    except Exception as e:
+        logger.debug(f"get_candles fallback ошибка: {e}")
     return None
 
 
@@ -1594,15 +1616,17 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         # Получаем текущую цену
         # WAIT_FOR_PRICE: таймаут 2-3 сек на get_current_price
         try:
-            price_check = await asyncio.wait_for(get_current_price(client, pair), timeout=3.0)
+            # PATCH_004: timeout 3 -> 5 сек
+            price_check = await asyncio.wait_for(get_current_price(client, pair), timeout=5.0)
         except asyncio.TimeoutError:
-            logger.warning("   ⚠ Таймаут get_current_price (3 сек)")
+            logger.warning("   ⚠ Таймаут get_current_price (5 сек)")
             price_check = None
         if price_check is None:
             try:
-                price_check = await asyncio.wait_for(get_current_price_from_forming_candle(client, pair), timeout=3.0)
+                # PATCH_004: timeout 3 -> 5 сек
+                price_check = await asyncio.wait_for(get_current_price_from_forming_candle(client, pair), timeout=5.0)
             except asyncio.TimeoutError:
-                logger.warning("   ⚠ Таймаут forming (3 сек)")
+                logger.warning("   ⚠ Таймаут forming (5 сек)")
                 price_check = None
         
         if price_check is None:
