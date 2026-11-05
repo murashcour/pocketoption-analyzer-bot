@@ -26,7 +26,7 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 try:
     import requests
     REQUESTS_AVAILABLE = True
@@ -2151,7 +2151,7 @@ def fetch_news_calendar() -> list:
 
     try:
         from datetime import timedelta
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         from_date = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         to_date = (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
