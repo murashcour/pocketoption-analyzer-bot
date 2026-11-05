@@ -7,6 +7,21 @@ PATCH_006: только визуализация. Не трогает логик
 from typing import Optional
 
 
+# PATCH_007: ширина строки с учётом эмодзи
+def _display_width(s: str) -> int:
+    """Возвращает визуальную ширину строки (эмодзи = 2, обычные = 1)."""
+    import unicodedata
+    width = 0
+    for ch in s:
+        if unicodedata.east_asian_width(ch) in ('W', 'F'):
+            width += 2
+        elif ord(ch) > 0x1F000:  # эмодзи
+            width += 2
+        else:
+            width += 1
+    return width
+
+
 # ANSI-цвета (совместимы с COLORS_FINAL)
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -91,11 +106,10 @@ def render_hud(
     W = 46  # ширина внутри рамки
 
     def _line(content: str) -> str:
-        """Обёртка строки в рамку."""
-        # Убираем ANSI для подсчёта длины
+        """PATCH_007: обёртка строки в рамку (с учётом эмодзи)."""
         import re
         clean = re.sub(r"\033\[[0-9;]*m", "", content)
-        pad = W - len(clean)
+        pad = W - _display_width(clean)
         if pad < 0:
             pad = 0
         return f"║ {content}{' ' * pad} ║"
@@ -130,6 +144,12 @@ def render_hud(
     lines.append(_line(f"Следующая:   ${next_ref:.2f}"))
 
     lines.append("╠" + "═" * (W + 2) + "╣")
+
+    # PATCH_008: по попыткам
+    att = getattr(state, "wins_by_attempt", {})
+    if att:
+        att_str = ", ".join(f"{k}:{att.get(k, 0)}" for k in (1, 2, 3, 4))
+        lines.append(_line(f"По попыткам: {att_str}"))
 
     # Серий
     lines.append(_line(f"Серий:       {state.total_series}"))

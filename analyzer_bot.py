@@ -1046,7 +1046,9 @@ async def _wait_close(deal: dict, stopper, state=None, client=None):
                 if result:
                     is_win = result.get("result") == "win"
                     profit = result.get("profit", 0)
-                    state.record_trade(is_win)
+                    # PATCH_008: передаём attempt (из deal)
+                    attempt = deal.get("step", 1)
+                    state.record_trade(is_win, attempt)
                     logger.info(f"🏁 Сделка #{deal['step']} закрыта: {'✅ WIN' if is_win else '❌ LOSS'} (profit={profit})")
                 else:
                     logger.warning(f"   ⚠ check_win вернул None для {trade_id}")
@@ -1893,6 +1895,8 @@ class TraderState:
         self.total_trades = 0
         self.win_trades = 0
         self.loss_trades = 0
+        # PATCH_008: победы по попыткам (1-я, 2-я, 3-я, 4-я)
+        self.wins_by_attempt = {1: 0, 2: 0, 3: 0, 4: 0}
 
         self.last_series_won: Optional[bool] = None
         self.skip_limit: int = CFG["skip_before_change_minus"]
@@ -1955,11 +1959,14 @@ class TraderState:
             self.pair_stats[pair]["losses"] += 1
             self.hour_stats[hour]["losses"] += 1
 
-    def record_trade(self, is_win: bool):
-        """TRADE_WINRATE: записываем результат сделки."""
+    def record_trade(self, is_win: bool, attempt: int = 1):
+        """PATCH_008: записываем результат сделки (с попыткой)."""
         self.total_trades += 1
         if is_win:
             self.win_trades += 1
+            # PATCH_008: победа по попытке (1-4)
+            if 1 <= attempt <= 4:
+                self.wins_by_attempt[attempt] += 1
         else:
             self.loss_trades += 1
 
@@ -2051,6 +2058,7 @@ class TraderState:
             f"   Winrate (серии): {wr:.1f}%",
             f"   Сделок: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})",
             f"   Winrate (сделки): {trade_wr:.1f}%",
+            f"   По попыткам: 1:{self.wins_by_attempt.get(1, 0)}, 2:{self.wins_by_attempt.get(2, 0)}, 3:{self.wins_by_attempt.get(3, 0)}, 4:{self.wins_by_attempt.get(4, 0)}",
             f"   Пропусков: {self.total_skips}",
             f"   Смен пар: {self.total_pair_changes}",
         ]
