@@ -163,6 +163,58 @@ def render_hud(
     return "\n".join(lines)
 
 
+# PATCH_013: сохранение HUD в JSON (для tmux + hud_show.py)
+def save_hud_to_json(
+    state,
+    balance: float,
+    ref_balance: float,
+    drawdown_threshold: float,
+    next_ref: float,
+    path: str = "hud.json",
+    double_mode: bool = False,
+):
+    """PATCH_013: сохраняет HUD в JSON (каждые 10 сек)."""
+    import json
+    import time
+
+    # WR по сериям
+    series_wr = (state.total_wins / state.total_series * 100) if state.total_series else 0.0
+    # WR по сделкам (без TIES)
+    _denom = state.win_trades + state.loss_trades
+    trade_wr = (state.win_trades / _denom * 100) if _denom > 0 else 0.0
+    # Просадка
+    dd_pct = ((ref_balance - balance) / ref_balance * 100) if ref_balance > 0 else 0.0
+
+    data = {
+        "timestamp": time.time(),
+        "double_mode": double_mode,
+        "wr_series": round(series_wr, 1),
+        "wr_trades": round(trade_wr, 1),
+        "total_series": state.total_series,
+        "total_wins": state.total_wins,
+        "total_losses": state.total_losses,
+        "total_trades": state.total_trades,
+        "win_trades": state.win_trades,
+        "loss_trades": state.loss_trades,
+        "ties": getattr(state, "ties", 0),
+        "balance": round(balance, 2),
+        "ref_balance": round(ref_balance, 2),
+        "drawdown_threshold": round(drawdown_threshold, 2),
+        "drawdown_pct": round(dd_pct, 1),
+        "next_ref": round(next_ref, 2),
+        "total_skips": state.total_skips,
+        "total_pair_changes": state.total_pair_changes,
+        "wins_by_attempt": getattr(state, "wins_by_attempt", {}),
+    }
+
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"save_hud_to_json: {e}")
+
+
 def print_hud(state, balance: float, ref_balance: float,
               drawdown_threshold: float, next_ref: float,
               double_mode: bool = False):

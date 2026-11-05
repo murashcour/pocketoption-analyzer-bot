@@ -38,11 +38,12 @@ from BinaryOptionsToolsV2 import PocketOptionAsync, PocketOptionError
 
 # PATCH_006: HUD-карточка
 try:
-    from hud import print_hud
+    from hud import print_hud, save_hud_to_json
     HUD_AVAILABLE = True
 except ImportError:
     HUD_AVAILABLE = False
     print_hud = None
+    save_hud_to_json = None
 
 # ==================== ПУТИ ====================
 # ==================== PATHS ====================
@@ -2834,6 +2835,20 @@ class Trader:
                             1 - CFG["max_drawdown_percent"] / 100
                         )
                         _next_ref = get_next_reference_step(self.reference_balance)
+
+                        # PATCH_013: сохраняем HUD в JSON (для tmux + hud_show.py)
+                        if HUD_AVAILABLE and save_hud_to_json is not None:
+                            try:
+                                save_hud_to_json(
+                                    state=self.state,
+                                    balance=_bal_now,
+                                    ref_balance=self.reference_balance,
+                                    drawdown_threshold=_threshold,
+                                    next_ref=_next_ref,
+                                    double_mode=getattr(self.state, "double_mode_active", False),
+                                )
+                            except Exception as e:
+                                logger.debug(f"save_hud_to_json: {e}")
 
                         # PATCH_006: HUD-карточка в консоль
                         if HUD_AVAILABLE and print_hud is not None:
