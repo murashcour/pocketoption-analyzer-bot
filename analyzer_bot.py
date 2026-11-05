@@ -1987,10 +1987,19 @@ class TraderState:
                 self.start_timestamp = time.time()
                 logger.info(f"⚠ PATCH_018: start_timestamp был 0.0 -> {self.start_timestamp:.0f}")
 
+            # PATCH_020: если старт был < 60 сек назад — игнорируем ВСЕ сделки
+            _elapsed = time.time() - self.start_timestamp
+            if _elapsed < 60:
+                self.win_trades = 0
+                self.loss_trades = 0
+                self.ties = 0
+                self.total_trades = 0
+                logger.info(f"PATCH_020: старт {_elapsed:.0f} сек назад — статистика 0")
+                return
+
             # PATCH_019: приводим start_timestamp к формату closeTimestamp
             _start_ts = self.start_timestamp
             if closed and len(str(closed[0].get("closeTimestamp", 0))) >= 13:
-                # closeTimestamp в миллисекундах -> start_timestamp * 1000
                 _start_ts = self.start_timestamp * 1000
 
             # PATCH_009/018/019: фильтруем по closeTimestamp >= start_timestamp
@@ -2772,7 +2781,18 @@ class Trader:
         self.state = TraderState(pairs)
         # PATCH_009: запоминаем время старта
         self.state.start_timestamp = time.time()
-        logger.info(f"⏱ Статистика: start_timestamp={self.state.start_timestamp:.0f}")
+        # PATCH_020: обнуляем статистику при запуске
+        self.state.total_series = 0
+        self.state.total_wins = 0
+        self.state.total_losses = 0
+        self.state.total_trades = 0
+        self.state.win_trades = 0
+        self.state.loss_trades = 0
+        self.state.ties = 0
+        self.state.wins_by_attempt = {1: 0, 2: 0, 3: 0, 4: 0}
+        self.state.total_skips = 0
+        self.state.total_pair_changes = 0
+        logger.info(f"⏱ Статистика: start_timestamp={self.state.start_timestamp:.0f}, счётчики сброшены")
         # PATCH_014/017: запускаем HUD-updater (каждые 10 сек)
         _hud_task = asyncio.create_task(self._hud_updater(client))
         logger.info(f"PATCH_017: _hud_updater создан (task={_hud_task})")
