@@ -1987,24 +1987,13 @@ class TraderState:
                 self.start_timestamp = time.time()
                 logger.info(f"⚠ PATCH_018: start_timestamp был 0.0 -> {self.start_timestamp:.0f}")
 
-            # PATCH_020: если старт был < 60 сек назад — игнорируем ВСЕ сделки
-            _elapsed = time.time() - self.start_timestamp
-            if _elapsed < 60:
-                self.win_trades = 0
-                self.loss_trades = 0
-                self.ties = 0
-                self.total_trades = 0
-                logger.info(f"PATCH_020: старт {_elapsed:.0f} сек назад — статистика 0")
-                return
-
-            # PATCH_019: приводим start_timestamp к формату closeTimestamp
-            _start_ts = self.start_timestamp
-            if closed and len(str(closed[0].get("closeTimestamp", 0))) >= 13:
-                _start_ts = self.start_timestamp * 1000
-
-            # PATCH_009/018/019: фильтруем по closeTimestamp >= start_timestamp
+            # PATCH_021: фильтруем по openTimestamp (сделки, открытые после старта)
             recent = [d for d in closed
-                      if d.get("closeTimestamp", 0) >= _start_ts]
+                      if d.get("openTimestamp", 0) >= self.start_timestamp]
+
+            # PATCH_021: лог для отладки
+            if recent:
+                logger.info(f"PATCH_021: start={self.start_timestamp:.0f}, open[0]={recent[0].get('openTimestamp')}, recent={len(recent)}")
 
             # PATCH_019: лог для отладки (logger.info, не debug)
             if recent:
