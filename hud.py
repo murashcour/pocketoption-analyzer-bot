@@ -82,10 +82,9 @@ def render_hud(
     if state.total_series > 0:
         series_wr = (state.total_wins / state.total_series) * 100
 
-    # === WR по сделкам ===
-    trade_wr = 0.0
-    if state.total_trades > 0:
-        trade_wr = (state.win_trades / state.total_trades) * 100
+    # === PATCH_016: WR по сделкам (без ничьих) ===
+    _denom = state.win_trades + state.loss_trades
+    trade_wr = (state.win_trades / _denom * 100) if _denom > 0 else 0.0
 
     # === Просадка ===
     dd_pct = 0.0
