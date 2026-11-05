@@ -2671,9 +2671,12 @@ class Trader:
         self.double_pnl_start = 0.0
 
     async def _hud_updater(self, client):
-        """PATCH_014: обновляет hud.json каждые 10 секунд."""
+        """PATCH_014/015: обновляет hud.json каждые 10 секунд (статистика из closed_deals)."""
         while not self.stopper.requested():
             try:
+                # PATCH_015: обновляем статистику из closed_deals (свежие данные)
+                await self.state.update_trade_stats_from_closed(client)
+
                 _bal_now = float(await client.balance())
                 _threshold = self.reference_balance * (
                     1 - CFG["max_drawdown_percent"] / 100
