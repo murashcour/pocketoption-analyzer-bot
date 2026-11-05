@@ -1897,6 +1897,9 @@ class TraderState:
         self.loss_trades = 0
         # PATCH_008: победы по попыткам (1-я, 2-я, 3-я, 4-я)
         self.wins_by_attempt = {1: 0, 2: 0, 3: 0, 4: 0}
+        # PATCH_009: статистика из closed_deals за сессию
+        self.start_timestamp = 0.0  # время старта (Unix timestamp)
+        self.ties = 0  # ничьи (profit == 0)
 
         self.last_series_won: Optional[bool] = None
         self.skip_limit: int = CFG["skip_before_change_minus"]
@@ -1970,24 +1973,30 @@ class TraderState:
         else:
             self.loss_trades += 1
 
-    async def update_trade_stats_on_stop(self, client, start_time: float):
-        """PATCH_001: пересчёт статистики по trade_ids (сброс счётчиков)."""
+    async def update_trade_stats_from_closed(self, client):
+        """PATCH_009: статистика из closed_deals за сессию (closeTimestamp >= start)."""
         try:
             closed = await client.closed_deals()
             if not closed:
                 logger.info("📊 Статистика: closed_deals пуст")
                 return
 
-            # PATCH_001: сбрасываем счётчики перед подсчётом
+            # PATCH_009: фильтруем по closeTimestamp >= start_timestamp
+            if self.start_timestamp > 0:
+                recent = [d for d in closed
+                          if d.get("closeTimestamp", 0) >= self.start_timestamp]
+            else:
+                recent = closed
+
+            if not recent:
+                logger.info(f"📊 Статистика: closed_deals={len(closed)}, но recent=0 (closeTimestamp < start={self.start_timestamp})")
+                return
+
+            # PATCH_009: сброс + подсчёт WIN / LOSS / TIES
             self.win_trades = 0
             self.loss_trades = 0
+            self.ties = 0
             self.total_trades = 0
-
-            # COUNT_BY_IDS: только сделки бота
-            recent = [d for d in closed if d.get("id") in self.trade_ids]
-            if not recent:
-                logger.info(f"📊 Статистика: trade_ids={len(self.trade_ids)}, но recent=0 (сделки не найдены в closed_deals)")
-                return
 
             for d in recent:
                 profit_str = str(d.get("profit", "0")).replace("+", "").replace(",", ".")
@@ -1999,16 +2008,25 @@ class TraderState:
                     self.win_trades += 1
                 elif profit < 0:
                     self.loss_trades += 1
-                # profit == 0 — не считаем (ничья)
+                else:
+                    self.ties += 1
 
-            self.total_trades = self.win_trades + self.loss_trades
+            self.total_trades = self.win_trades + self.loss_trades + self.ties
+            # PATCH_011: WR = win / (win + loss) — без TIES
+            _denom = self.win_trades + self.loss_trades
+            _trade_wr = (self.win_trades / _denom * 100) if _denom > 0 else 0.0
             logger.info(
-                f"📊 Статистика за время работы: {self.total_trades} "
-                f"(✅ {self.win_trades} / ❌ {self.loss_trades}) "
-                f"| trade_ids={len(self.trade_ids)}, recent={len(recent)}"
+                f"📊 Статистика за сессию: {self.total_trades} "
+                f"(✅ {self.win_trades} / ❌ {self.loss_trades} / ⚪ {self.ties}) "
+                f"| WR {_trade_wr:.1f}% "
+                f"| closed={len(closed)}, recent={len(recent)}"
             )
         except Exception as e:
-            logger.debug(f"Ошибка update_trade_stats_on_stop: {e}")
+            logger.debug(f"Ошибка update_trade_stats_from_closed: {e}")
+
+    async def update_trade_stats_on_stop(self, client, start_time: float):
+        """PATCH_010: alias (вызывает update_trade_stats_from_closed)."""
+        await self.update_trade_stats_from_closed(client)
 
     async def update_trade_stats(self, client):
         """CLOSED_DEALS: обновляем статистику по закрытым сделкам."""
@@ -2051,12 +2069,14 @@ class TraderState:
 
     def summary(self) -> str:
         wr = (self.total_wins / self.total_series * 100) if self.total_series else 0.0
-        trade_wr = (self.win_trades / self.total_trades * 100) if self.total_trades else 0.0
+        # PATCH_011: WR = win / (win + loss) — без TIES
+        _denom = self.win_trades + self.loss_trades
+        trade_wr = (self.win_trades / _denom * 100) if _denom > 0 else 0.0
         lines = [
             f"📊 ИТОГИ:",
             f"   Серий: {self.total_series} (✅ {self.total_wins} / ❌ {self.total_losses})",
             f"   Winrate (серии): {wr:.1f}%",
-            f"   Сделок: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})",
+            f"   Сделок: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades} / ⚪ {getattr(self, 'ties', 0)})",
             f"   Winrate (сделки): {trade_wr:.1f}%",
             f"   По попыткам: 1:{self.wins_by_attempt.get(1, 0)}, 2:{self.wins_by_attempt.get(2, 0)}, 3:{self.wins_by_attempt.get(3, 0)}, 4:{self.wins_by_attempt.get(4, 0)}",
             f"   Пропусков: {self.total_skips}",
@@ -2702,6 +2722,9 @@ class Trader:
             return
 
         self.state = TraderState(pairs)
+        # PATCH_009: запоминаем время старта
+        self.state.start_timestamp = time.time()
+        logger.info(f"⏱ Статистика: start_timestamp={self.state.start_timestamp:.0f}")
 
         # === РУЧНОЙ РЕЖИМ ===
         if self.manual_mode:
