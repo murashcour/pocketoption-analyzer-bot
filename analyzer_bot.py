@@ -1640,16 +1640,8 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             in_loss = price_check > entry
         
         logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={price_check:.5f} (entry={entry:.5f}) | in_loss={in_loss}")
-        
-        # Если в минусе — открываем догон
-        if in_loss:
-            logger.info(f"   ❌ Цена против нас — открываю {step+1}-ю")
-        else:
-            logger.info(f"   ✅ Цена в нашу сторону — ЖДЁМ")
-            continue
-        logger.info(f"   [CHECK] step={step+1}/{max_steps} | price={price_check:.5f} (entry={entry:.5f}) | in_loss={in_loss}")
 
-        # Если хотя бы один источник говорит "минус" — открываем догон
+        # Если в минусе — открываем догон
         if in_loss:
             logger.info(f"   ❌ Цена против нас — открываю {step+1}-ю")
             new_entry = price_check if price_check is not None else entry_price
