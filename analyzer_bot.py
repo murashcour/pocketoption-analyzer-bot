@@ -2670,6 +2670,29 @@ class Trader:
         self.double_mode_active = False
         self.double_pnl_start = 0.0
 
+    async def _hud_updater(self, client):
+        """PATCH_014: обновляет hud.json каждые 10 секунд."""
+        while not self.stopper.requested():
+            try:
+                _bal_now = float(await client.balance())
+                _threshold = self.reference_balance * (
+                    1 - CFG["max_drawdown_percent"] / 100
+                )
+                _next_ref = get_next_reference_step(self.reference_balance)
+
+                if HUD_AVAILABLE and save_hud_to_json is not None:
+                    save_hud_to_json(
+                        state=self.state,
+                        balance=_bal_now,
+                        ref_balance=self.reference_balance,
+                        drawdown_threshold=_threshold,
+                        next_ref=_next_ref,
+                        double_mode=getattr(self.state, "double_mode_active", False),
+                    )
+            except Exception as e:
+                logger.debug(f"hud_updater: {e}")
+            await asyncio.sleep(10)  # каждые 10 секунд
+
     async def run(self):
         """Внешний цикл реконнекта при потере соединения."""
         max_reconnect = 10
@@ -2726,6 +2749,8 @@ class Trader:
         # PATCH_009: запоминаем время старта
         self.state.start_timestamp = time.time()
         logger.info(f"⏱ Статистика: start_timestamp={self.state.start_timestamp:.0f}")
+        # PATCH_014: запускаем HUD-updater (каждые 10 сек)
+        asyncio.create_task(self._hud_updater(client))
 
         # === РУЧНОЙ РЕЖИМ ===
         if self.manual_mode:
