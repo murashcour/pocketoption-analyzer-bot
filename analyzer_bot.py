@@ -1564,8 +1564,8 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
             logger.warning("   ⚠ Не дождались свечи — стоп")
             return False
 
-    # 1. Открываем 1-ю сделку
-    deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price)
+    # 1. Открываем 1-ю сделку (PATCH_001: state передаём для COUNT_BY_IDS)
+    deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, entry_price, state)
     if deal is None:
         logger.warning("   ⚠ Не удалось открыть 1-ю — стоп")
         return False
@@ -1629,7 +1629,7 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         if in_loss:
             logger.info(f"   ❌ Цена против нас — открываю {step+1}-ю")
             new_entry = price_check if price_check is not None else entry_price
-            new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, new_entry)
+            new_deal = await _open_deal_raw(client, pair, 0, signal, [bet], stopper, new_entry, state)
             if new_deal is None:
                 logger.warning(f"   ⚠ Не удалось открыть {step+1}-ю — стоп")
                 break
@@ -1940,18 +1940,42 @@ class TraderState:
             self.loss_trades += 1
 
     async def update_trade_stats_on_stop(self, client, start_time: float):
-        """SIMPLE_STATS: простой подсчет сделок за время работы (через closed_deals)."""
+        """PATCH_001: пересчёт статистики по trade_ids (сброс счётчиков)."""
         try:
             closed = await client.closed_deals()
-            if closed:
-                # COUNT_BY_IDS: фильтруем только сделки бота (по ID)
-                recent = [d for d in closed if d.get("id") in self.trade_ids]
-                if recent:
-                    # TOTAL_TRADES_FIX: total = win + loss (только закрытые)
-                    self.win_trades = sum(1 for d in recent if float(str(d.get("profit", "0")).replace("+", "").replace(",", ".")) > 0)
-                    self.loss_trades = sum(1 for d in recent if float(str(d.get("profit", "0")).replace("+", "").replace(",", ".")) < 0)
-                    self.total_trades = self.win_trades + self.loss_trades
-                    logger.info(f"📊 Статистика за время работы: {self.total_trades} (✅ {self.win_trades} / ❌ {self.loss_trades})")
+            if not closed:
+                logger.info("📊 Статистика: closed_deals пуст")
+                return
+
+            # PATCH_001: сбрасываем счётчики перед подсчётом
+            self.win_trades = 0
+            self.loss_trades = 0
+            self.total_trades = 0
+
+            # COUNT_BY_IDS: только сделки бота
+            recent = [d for d in closed if d.get("id") in self.trade_ids]
+            if not recent:
+                logger.info(f"📊 Статистика: trade_ids={len(self.trade_ids)}, но recent=0 (сделки не найдены в closed_deals)")
+                return
+
+            for d in recent:
+                profit_str = str(d.get("profit", "0")).replace("+", "").replace(",", ".")
+                try:
+                    profit = float(profit_str)
+                except (ValueError, TypeError):
+                    continue
+                if profit > 0:
+                    self.win_trades += 1
+                elif profit < 0:
+                    self.loss_trades += 1
+                # profit == 0 — не считаем (ничья)
+
+            self.total_trades = self.win_trades + self.loss_trades
+            logger.info(
+                f"📊 Статистика за время работы: {self.total_trades} "
+                f"(✅ {self.win_trades} / ❌ {self.loss_trades}) "
+                f"| trade_ids={len(self.trade_ids)}, recent={len(recent)}"
+            )
         except Exception as e:
             logger.debug(f"Ошибка update_trade_stats_on_stop: {e}")
 
@@ -2742,9 +2766,7 @@ class Trader:
                 except Exception as e:
                     logger.debug(f"Ошибка проверки просадки: {e}")
 
-                # === CLOSED_DEALS: обновляем статистику сделок каждые 5 мин ===
-                if time.time() - self.last_status_show >= 300:
-                    await self.state.update_trade_stats(client)
+                # PATCH_001: update_trade_stats удалён (брал все closed_deals без фильтра)
 
                 # === ПОКАЗ REF/BAL КАЖДЫЕ 5 МИН ===
                 if time.time() - self.last_status_show >= 300:
