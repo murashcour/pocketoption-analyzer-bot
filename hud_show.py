@@ -133,7 +133,7 @@ def main():
     # По попыткам
     att = data.get("wins_by_attempt", {})
     if att:
-        att_str = ", ".join(f"{k}:{att.get(str(k), att.get(k, 0))}" for k in (1, 2, 3, 4))
+        att_str = ", ".join(f"{k}:{att.get(str(k), att.get(k, 0))}" for k in (1, 2, 3, 4, 5, 6, 7))
         lines.append(_line(f"По попыткам: {att_str}"))
 
     # Серий
