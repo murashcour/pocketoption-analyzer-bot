@@ -1132,32 +1132,8 @@ async def _open_step_1(client, pair: str, signal: str, entry_price: float,
             if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
                 return None, None, None
         else:
-            # Не ждём — пересчитываем full_analysis для свежей entry
-            new_sig, new_entry, reason = await full_analysis(client, pair)
-            
-            # HYSTERESIS: если сигнал стал нейтральным, но раньше был CALL/PUT — не меняем
-            if new_sig is None and CFG.get("hysteresis_enabled", False):
-                if state is not None and state.last_signal is not None:
-                    new_sig = state.last_signal
-                    new_entry = entry_price
-                    logger.info(f"   [Гистерезис] сигнал нейтральный, оставляем {new_sig}")
-            
-            if new_sig is None:
-                # BAD_PAIRS_FIX2: mark_bad_pair при NO_DATA
-                if reason == "NO_DATA" and state is not None:
-                    state.mark_bad_pair(pair, minutes=10)
-                logger.info(f"   ⏸ 1-я: сигнал пропал на {pair} — смена пары")
-                if state is not None:
-                    state.change_pair("1-я: сигнал пропал")
-                    pair = state.current_pair()
-                    pairs_tried += 1
-                _pause = CFG.get("no_signal_pause_sec", 60)
-                logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
-                await stopper.sleep(_pause)
-                continue
-            if new_sig != signal:
-                logger.info(f"   ⚠ 1-я: сигнал изменился ({signal} → {new_sig}) — открываю новый")
-            signal, entry_price = new_sig, new_entry
+            # PATCH_026: Не пересчитываем сигнал (как в усреднении). Используем тот, что найден в главном цикле.
+            logger.info("   ⏱ Используем исходный сигнал (без перепроверки, как в усреднении)")
 
         # ENTRY_PAUSE: Пауза 1 сек перед открытием (чтобы цена устоялась)
         logger.info("   ⏱ Пауза 1 сек перед открытием...")
