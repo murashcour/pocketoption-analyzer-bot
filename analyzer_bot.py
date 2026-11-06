@@ -1584,7 +1584,7 @@ async def _open_step_5(client, pair: str, signal: str, steps: list, stopper,
     if not with_analysis:
         # === Вариант A: СРАЗУ (без анализа, без цикла) ===
         logger.info(f"   📈 5-я ступень СРАЗУ (момент минус)")
-        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        deal = await _open_deal_raw(client, pair, 4, signal, steps, stopper, entry_price, state)
         return pair, deal
 
     # === PAYOUT_CHANGE_PAIR_SMART ===
@@ -1595,7 +1595,7 @@ async def _open_step_5(client, pair: str, signal: str, steps: list, stopper,
     # Если payout OK и пара не менялась — догон (pure_martingale)
     if CFG.get("pure_martingale", False) and not changed:
         logger.info(f"   📈 5-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
-        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        deal = await _open_deal_raw(client, pair, 4, signal, steps, stopper, entry_price, state)
         return pair, deal
 
     # Иначе (пара сменилась или pure_martingale=False) — с анализом
@@ -1667,7 +1667,7 @@ async def _open_step_5(client, pair: str, signal: str, steps: list, stopper,
             continue
 
         # Открыть
-        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry, state)
+        deal = await _open_deal_raw(client, pair, 4, new_signal, steps, stopper, new_entry, state)
         if deal is None:
             # PAYOUT_FIX: при отмене (payout) — смена пары
             logger.warning(f"   ⚠️ Ошибка открытия 2-й (payout?) — смена пары")
@@ -1761,7 +1761,7 @@ async def _open_step_6(client, pair: str, signal: str, steps: list, stopper,
                 pairs_tried = 0
             continue
 
-        deal = await _open_deal_raw(client, pair, 2, new_signal, steps, stopper, new_entry)
+        deal = await _open_deal_raw(client, pair, 5, new_signal, steps, stopper, new_entry)
         if deal is None:
             # PAYOUT_FIX: при отмене (payout) — смена пары
             logger.warning(f"   ⚠ Ошибка открытия 3-й (payout?) — смена пары")
@@ -1790,7 +1790,7 @@ async def _open_step_7(client, pair: str, signal: str, steps: list, stopper,
     if not with_analysis:
         # === Вариант A: СРАЗУ (без анализа, без цикла) ===
         logger.info(f"   📈 7-я ступень СРАЗУ (момент минус)")
-        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        deal = await _open_deal_raw(client, pair, 6, signal, steps, stopper, entry_price, state)
         return pair, deal
 
     # === PAYOUT_CHANGE_PAIR_SMART ===
@@ -1801,7 +1801,7 @@ async def _open_step_7(client, pair: str, signal: str, steps: list, stopper,
     # Если payout OK и пара не менялась — догон (pure_martingale)
     if CFG.get("pure_martingale", False) and not changed:
         logger.info(f"   📈 7-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
-        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        deal = await _open_deal_raw(client, pair, 6, signal, steps, stopper, entry_price, state)
         return pair, deal
 
     # Иначе (пара сменилась или pure_martingale=False) — с анализом
@@ -1873,7 +1873,7 @@ async def _open_step_7(client, pair: str, signal: str, steps: list, stopper,
             continue
 
         # Открыть
-        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry, state)
+        deal = await _open_deal_raw(client, pair, 6, new_signal, steps, stopper, new_entry, state)
         if deal is None:
             # PAYOUT_FIX: при отмене (payout) — смена пары
             logger.warning(f"   ⚠️ Ошибка открытия 2-й (payout?) — смена пары")
