@@ -847,7 +847,7 @@ def get_martingale_steps(balance: float, double_mode: bool = False) -> List[floa
     Ступени мартингейла.
     Учитывает balance_tiers (если включено) и double_mode (удвоение базы).
     """
-    count = max(1, min(int(CFG.get("martingale_steps_count", 2)), 4))
+    count = max(1, min(int(CFG.get("martingale_steps_count", 2)), 7))
 
     base_steps = []
     # === BALANCE TIERS ===
@@ -1565,6 +1565,325 @@ async def _open_step_4(client, pair: str, signal: str, steps: list, stopper,
         return pair, deal
 
 
+
+async def _open_step_5(client, pair: str, signal: str, steps: list, stopper,
+                        with_analysis: bool = False, state=None, entry_price: float = 0):
+    """
+    5-я ступень.
+    with_analysis=False → СРАЗУ (без анализа).
+    with_analysis=True  → С АНАЛИЗОМ + цикл до открытия.
+    Возвращает deal или None.
+    """
+    if not with_analysis:
+        # === Вариант A: СРАЗУ (без анализа, без цикла) ===
+        logger.info(f"   📈 5-я ступень СРАЗУ (момент минус)")
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        return pair, deal
+
+    # === PAYOUT_CHANGE_PAIR_SMART ===
+    pair, changed, ok = await _ensure_good_payout(client, pair, "5-я", state, stopper)
+    if not ok:
+        return pair, None
+
+    # Если payout OK и пара не менялась — догон (pure_martingale)
+    if CFG.get("pure_martingale", False) and not changed:
+        logger.info(f"   📈 5-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        return pair, deal
+
+    # Иначе (пара сменилась или pure_martingale=False) — с анализом
+    if changed:
+        logger.info(f"   📈 5-я ступень с ПОЛНЫМ АНАЛИЗОМ (пара сменилась → {pair})")
+    else:
+        logger.info(f"   📈 5-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+
+    pass_number = 0
+    pairs_tried = 0
+    max_pairs = len(state.pairs) if state else 20
+    start_time = time.time()
+    last_log_time = start_time
+
+    while True:
+        if stopper.requested():
+            return None, None
+
+        # Progress каждые 5 минут
+        if time.time() - last_log_time >= 300:
+            elapsed_min = (time.time() - start_time) / 60
+            logger.info(
+                f"   🔍 Ищу 2-ю: круг {pass_number+1}, "
+                f"пар {pairs_tried}, время {elapsed_min:.0f} мин"
+            )
+            last_log_time = time.time()
+
+        # Анализ
+        new_signal, new_entry, reason = await full_analysis(client, pair)
+        if new_signal is None:
+            # BAD_PAIRS_FIX: mark_bad_pair при NO_DATA
+            if reason == "NO_DATA" and state is not None:
+                state.mark_bad_pair(pair, minutes=10)
+            logger.info(f"   ⏸ 5-я (анализ): нет сигнала на {pair} — смена пары")
+            if state is not None:
+                _old_pair = pair
+                state.change_pair("5-я нет сигнала")
+                pair = state.current_pair()
+                pairs_tried += 1
+                if pair == _old_pair:
+                    _pause = CFG.get("no_signal_pause_sec", 60)
+                    logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+                    await stopper.sleep(_pause)
+                else:
+                    logger.info(f"   🔄 Пара сменилась ({_old_pair} → {pair}) — проверяю сразу")
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        logger.info(f"   ✅ 5-я (анализ): сигнал {new_signal} @ {new_entry}")
+
+        # NO_WAIT_STEP_2_3: 5-я ступень — сразу после анализа (догон)
+
+        # Momentum check
+        ok = await _check_momentum(client, pair, new_signal, new_entry)
+        if not ok:
+            logger.info(f"   ⏸ 5-я (анализ): momentum против — меняю пару")
+            if state is not None:
+                state.change_pair("5-я momentum против")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        # Открыть
+        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry, state)
+        if deal is None:
+            # PAYOUT_FIX: при отмене (payout) — смена пары
+            logger.warning(f"   ⚠️ Ошибка открытия 2-й (payout?) — смена пары")
+            if state is not None:
+                state.change_pair("5-я: отмена открытия (payout)")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+        return pair, deal
+
+
+
+async def _open_step_6(client, pair: str, signal: str, steps: list, stopper,
+                        with_analysis: bool = False, state=None, entry_price: float = 0):
+    """
+    6-я ступень (как 2-я B: с анализом, цикл до открытия).
+    Возвращает (pair, deal) или (None, None).
+    """
+    # PURE_STEP2_ONLY: 6-я всегда с анализом
+    # PAYOUT_CHANGE_PAIR_SMART: проверка payout
+    pair, _, ok = await _ensure_good_payout(client, pair, "6-я", state, stopper)
+    if not ok:
+        return pair, None
+
+    logger.info(f"   📈 6-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+
+    pass_number = 0
+    pairs_tried = 0
+    max_pairs = len(state.pairs) if state else 20
+    start_time = time.time()
+    last_log_time = start_time
+
+    while True:
+        if stopper.requested():
+            return None, None
+
+        if time.time() - last_log_time >= 300:
+            elapsed_min = (time.time() - start_time) / 60
+            logger.info(
+                f"   🔍 Ищу 3-ю: круг {pass_number+1}, "
+                f"пар {pairs_tried}, время {elapsed_min:.0f} мин"
+            )
+            last_log_time = time.time()
+
+        new_signal, new_entry, reason = await full_analysis(client, pair)
+        if new_signal is None:
+            # BAD_PAIRS_FIX: mark_bad_pair при NO_DATA
+            if reason == "NO_DATA" and state is not None:
+                state.mark_bad_pair(pair, minutes=10)
+            logger.info(f"   ⏸ 6-я (анализ): нет сигнала на {pair} — смена пары")
+            if state is not None:
+                _old_pair = pair
+                state.change_pair("6-я нет сигнала")
+                pair = state.current_pair()
+                pairs_tried += 1
+                if pair == _old_pair:
+                    _pause = CFG.get("no_signal_pause_sec", 60)
+                    logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+                    await stopper.sleep(_pause)
+                else:
+                    logger.info(f"   🔄 Пара сменилась ({_old_pair} → {pair}) — проверяю сразу")
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        logger.info(f"   ✅ 6-я (анализ): сигнал {new_signal} @ {new_entry}")
+
+        # WAIT_STEP_3_4: ожидание свечи для 6-я ступени
+        if CFG.get("wait_candle_start_step3_4", True):
+            if not await _wait_candle_start(stopper, max_sec=CFG.get("candle_start_max_sec", 8)):
+                return None, None
+
+        ok = await _check_momentum(client, pair, new_signal, new_entry)
+        if not ok:
+            logger.info(f"   ⏸ 6-я (анализ): momentum против — меняю пару")
+            if state is not None:
+                state.change_pair("6-я momentum против")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        deal = await _open_deal_raw(client, pair, 2, new_signal, steps, stopper, new_entry)
+        if deal is None:
+            # PAYOUT_FIX: при отмене (payout) — смена пары
+            logger.warning(f"   ⚠ Ошибка открытия 3-й (payout?) — смена пары")
+            if state is not None:
+                state.change_pair("6-я: отмена открытия (payout)")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+        return pair, deal
+
+
+
+async def _open_step_7(client, pair: str, signal: str, steps: list, stopper,
+                        with_analysis: bool = False, state=None, entry_price: float = 0):
+    """
+    7-я ступень.
+    with_analysis=False → СРАЗУ (без анализа).
+    with_analysis=True  → С АНАЛИЗОМ + цикл до открытия.
+    Возвращает deal или None.
+    """
+    if not with_analysis:
+        # === Вариант A: СРАЗУ (без анализа, без цикла) ===
+        logger.info(f"   📈 7-я ступень СРАЗУ (момент минус)")
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        return pair, deal
+
+    # === PAYOUT_CHANGE_PAIR_SMART ===
+    pair, changed, ok = await _ensure_good_payout(client, pair, "7-я", state, stopper)
+    if not ok:
+        return pair, None
+
+    # Если payout OK и пара не менялась — догон (pure_martingale)
+    if CFG.get("pure_martingale", False) and not changed:
+        logger.info(f"   📈 7-я ступень СРАЗУ по исходному сигналу {signal} (pure_martingale)")
+        deal = await _open_deal_raw(client, pair, 1, signal, steps, stopper, entry_price, state)
+        return pair, deal
+
+    # Иначе (пара сменилась или pure_martingale=False) — с анализом
+    if changed:
+        logger.info(f"   📈 7-я ступень с ПОЛНЫМ АНАЛИЗОМ (пара сменилась → {pair})")
+    else:
+        logger.info(f"   📈 7-я ступень с ПОЛНЫМ АНАЛИЗОМ")
+
+    pass_number = 0
+    pairs_tried = 0
+    max_pairs = len(state.pairs) if state else 20
+    start_time = time.time()
+    last_log_time = start_time
+
+    while True:
+        if stopper.requested():
+            return None, None
+
+        # Progress каждые 5 минут
+        if time.time() - last_log_time >= 300:
+            elapsed_min = (time.time() - start_time) / 60
+            logger.info(
+                f"   🔍 Ищу 2-ю: круг {pass_number+1}, "
+                f"пар {pairs_tried}, время {elapsed_min:.0f} мин"
+            )
+            last_log_time = time.time()
+
+        # Анализ
+        new_signal, new_entry, reason = await full_analysis(client, pair)
+        if new_signal is None:
+            # BAD_PAIRS_FIX: mark_bad_pair при NO_DATA
+            if reason == "NO_DATA" and state is not None:
+                state.mark_bad_pair(pair, minutes=10)
+            logger.info(f"   ⏸ 7-я (анализ): нет сигнала на {pair} — смена пары")
+            if state is not None:
+                _old_pair = pair
+                state.change_pair("7-я нет сигнала")
+                pair = state.current_pair()
+                pairs_tried += 1
+                if pair == _old_pair:
+                    _pause = CFG.get("no_signal_pause_sec", 60)
+                    logger.info(f"   ⏸ Пауза {_pause}с перед проверкой следующей пары (no_signal_pause_sec)")
+                    await stopper.sleep(_pause)
+                else:
+                    logger.info(f"   🔄 Пара сменилась ({_old_pair} → {pair}) — проверяю сразу")
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        logger.info(f"   ✅ 7-я (анализ): сигнал {new_signal} @ {new_entry}")
+
+        # NO_WAIT_STEP_2_3: 7-я ступень — сразу после анализа (догон)
+
+        # Momentum check
+        ok = await _check_momentum(client, pair, new_signal, new_entry)
+        if not ok:
+            logger.info(f"   ⏸ 7-я (анализ): momentum против — меняю пару")
+            if state is not None:
+                state.change_pair("7-я momentum против")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+
+        # Открыть
+        deal = await _open_deal_raw(client, pair, 1, new_signal, steps, stopper, new_entry, state)
+        if deal is None:
+            # PAYOUT_FIX: при отмене (payout) — смена пары
+            logger.warning(f"   ⚠️ Ошибка открытия 2-й (payout?) — смена пары")
+            if state is not None:
+                state.change_pair("7-я: отмена открытия (payout)")
+                pair = state.current_pair()
+                pairs_tried += 1
+            await stopper.sleep(2)
+            if pairs_tried >= max_pairs:
+                pass_number += 1
+                await stopper.sleep(CFG.get("step3_pause_between_circles_sec", 30))
+                pairs_tried = 0
+            continue
+        return pair, deal
+
+
+
 async def run_averaging_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
     OPENED_DEALS: проверяем profit через get_opened_deals().
@@ -1687,197 +2006,140 @@ async def run_averaging_series(client, pair: str, signal: str, stopper: StopChec
         return False
 
 async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
-    """
-    Серия мартингейла (новая логика).
-
-    Ступени:
-    - 1-я: full_analysis + начало 1м + 3 сек + momentum
-    - 2-я: A) СРАЗУ (момент минус T+30) / B) С АНАЛИЗОМ (реально минус T+60)
-    - 3-я: независимая, как 1-я
-
-    Возвращает True (серия плюс) / False (серия минус).
-    """
-    # ===== Инициализация =====
     try:
         B_start = float(await client.balance())
-    except Exception as e:
-        logger.error(f"Не удалось получить баланс: {e}")
+    except Exception:
         return False
 
     steps = get_martingale_steps(B_start, double_mode=getattr(state, "double_mode_active", False))
     if state is not None:
         state.last_steps = steps
     direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
-
-    # CHECKLIST_ALL: Цветной вывод серии
-    if signal == "CALL":
-        color_code = "\033[94m"  # Синий
-    else:
-        color_code = "\033[91m"  # Красный
+    color_code = "\033[94m" if signal == "CALL" else "\033[91m"
     reset_code = "\033[0m"
 
     logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
     logger.info(f"   Ступени: {steps}")
     print(f"{color_code}\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}{reset_code}")
-    print(f"{color_code}   Ступени: {steps}{reset_code}")
 
-    # ===== ШАГ 1: 1-я ступень (полный вход) =====
+    # ШАГ 1: Анализ
     pair, deal_1, entry_1 = await _open_step_1(client, pair, signal, entry_price, steps, stopper, state=state)
     if deal_1 is None:
-        logger.info(f"⏸ СЕРИЯ прервана: не удалось открыть 1-ю")
         return False
-    
-    # HYSTERESIS: запомнить сигнал
     if state is not None:
         state.last_signal = signal
 
-    # ===== ШАГ 2: Ждём закрытия 1-й =====
-    logger.info(f"⏳ Ждём закрытия 1-й ступени...")
     await _wait_close(deal_1, stopper, state, client)
+    if stopper.requested(): return False
 
-    if stopper.requested():
-        logger.warning("⏹ Остановка во время серии")
-        return False
-
-    try:
-        B_after_1 = float(await client.balance())
-    except Exception as e:
-        logger.error(f"Не удалось получить баланс: {e}")
-        return False
-
+    B_after_1 = float(await client.balance())
     delta_1 = B_after_1 - B_start
-    logger.info(f"🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})")
-
+    logger.info(f"🏁 Итог 1: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})")
     if delta_1 > 0:
-        if state is not None:
-            state.last_delta = delta_1
-        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})")
-        print(f"\033[92m🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})\033[0m")
+        if state is not None: state.last_delta = delta_1
         print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_1:+.2f})\033[0m")
         return True
-    else:
-        print(f"\033[91m🏁 Итог 1-й: ${B_start:.2f} → ${B_after_1:.2f} (Δ {delta_1:+.2f})\033[0m")
 
-    # Реально минус → 2-я С АНАЛИЗОМ
-    if len(steps) < 2:
-        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_1:+.2f}) — 2-й нет в config")
-        return False
+    if len(steps) < 2: return False
 
-    logger.info(f"   → 1-я закрылась в минус → 2-я С АНАЛИЗОМ")
-    pair, deal_2 = await _open_step_2(
-        client, pair, signal, steps, stopper,
-        with_analysis=True, state=state, entry_price=entry_1
-    )
-
-    if deal_2 is None:
-        logger.info(f"❌ 2-я не открыта — серия закрыта")
-        return False
-
-    # ===== ШАГ 3: Ждём закрытия 2-й =====
+    # ШАГ 2: Догон
+    pair, deal_2 = await _open_step_2(client, pair, signal, steps, stopper, with_analysis=False, state=state, entry_price=entry_1)
+    if deal_2 is None: return False
     await _wait_close(deal_2, stopper, state, client)
+    if stopper.requested(): return False
 
-    try:
-        B_after_2 = float(await client.balance())
-    except Exception as e:
-        logger.error(f"Не удалось получить баланс: {e}")
-        return False
-
+    B_after_2 = float(await client.balance())
     delta_2 = B_after_2 - B_start
     logger.info(f"🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})")
-
     if delta_2 > 0:
-        if state is not None:
-            state.last_delta = delta_2
-        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})")
-        print(f"\033[92m🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})\033[0m")
+        if state is not None: state.last_delta = delta_2
         print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_2:+.2f})\033[0m")
         return True
-    else:
-        print(f"\033[91m🏁 Итог 1+2: ${B_start:.2f} → ${B_after_2:.2f} (Δ {delta_2:+.2f})\033[0m")
 
-    # ===== ПРОВЕРКА: есть ли 3-я ступень в steps? =====
-    if len(steps) < 3:
-        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_2:+.2f}) — 3-й нет в config (steps={len(steps)})")
-        return False
+    if len(steps) < 3: return False
 
-    # ===== ШАГ 4: 3-я ступень (если есть в config) =====
-    if len(steps) < 3:
-        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_2:+.2f}) — 3-й нет в config (steps={len(steps)})")
-        return False
-
-    logger.info(f"❌ Итог 1+2 минус (Δ {delta_2:+.2f}) — 3-я С АНАЛИЗОМ")
-    pair, deal_3 = await _open_step_3(
-        client, pair, signal, steps, stopper,
-        with_analysis=True, state=state, entry_price=entry_1
-    )
-    if deal_3 is None:
-        logger.info(f"❌ 3-я не открыта — серия закрыта")
-        return False
-
+    # ШАГ 3: Анализ (новый вход)
+    pair, deal_3 = await _open_step_3(client, pair, signal, steps, stopper, with_analysis=True, state=state, entry_price=entry_1)
+    if deal_3 is None: return False
     await _wait_close(deal_3, stopper, state, client)
+    if stopper.requested(): return False
 
-    try:
-        B_after_3 = float(await client.balance())
-    except Exception as e:
-        logger.error(f"Не удалось получить баланс: {e}")
-        return False
-
+    B_after_3 = float(await client.balance())
     delta_3 = B_after_3 - B_start
     logger.info(f"🏁 Итог 1+2+3: ${B_start:.2f} → ${B_after_3:.2f} (Δ {delta_3:+.2f})")
-
     if delta_3 > 0:
-        if state is not None:
-            state.last_delta = delta_3
-        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_3:+.2f})")
-        print(f"\033[92m🏁 Итог 1+2+3: ${B_start:.2f} → ${B_after_3:.2f} (Δ {delta_3:+.2f})\033[0m")
+        if state is not None: state.last_delta = delta_3
         print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_3:+.2f})\033[0m")
         return True
-    else:
-        print(f"\033[91m🏁 Итог 1+2+3: ${B_start:.2f} → ${B_after_3:.2f} (Δ {delta_3:+.2f})\033[0m")
 
-    # ===== ШАГ 5: 4-я ступень (если есть в config) =====
-    if len(steps) < 4:
-        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_3:+.2f}) — 4-й нет в config (steps={len(steps)})")
-        return False
+    if len(steps) < 4: return False
 
-    logger.info(f"❌ Итог 1+2+3 минус (Δ {delta_3:+.2f}) — 4-я С АНАЛИЗОМ")
-    pair, deal_4 = await _open_step_4(
-        client, pair, signal, steps, stopper,
-        with_analysis=True, state=state, entry_price=entry_1
-    )
-    if deal_4 is None:
-        logger.info(f"❌ 4-я не открыта — серия закрыта")
-        return False
-
+    # ШАГ 4: Догон
+    pair, deal_4 = await _open_step_4(client, pair, signal, steps, stopper, with_analysis=False, state=state, entry_price=entry_1)
+    if deal_4 is None: return False
     await _wait_close(deal_4, stopper, state, client)
+    if stopper.requested(): return False
 
-    try:
-        B_final = float(await client.balance())
-    except Exception as e:
-        logger.error(f"Не удалось получить баланс: {e}")
-        return False
+    B_after_4 = float(await client.balance())
+    delta_4 = B_after_4 - B_start
+    logger.info(f"🏁 Итог 1+2+3+4: ${B_start:.2f} → ${B_after_4:.2f} (Δ {delta_4:+.2f})")
+    if delta_4 > 0:
+        if state is not None: state.last_delta = delta_4
+        print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_4:+.2f})\033[0m")
+        return True
 
+    if len(steps) < 5: return False
+
+    # ШАГ 5: Догон
+    pair, deal_5 = await _open_step_5(client, pair, signal, steps, stopper, with_analysis=False, state=state, entry_price=entry_1)
+    if deal_5 is None: return False
+    await _wait_close(deal_5, stopper, state, client)
+    if stopper.requested(): return False
+
+    B_after_5 = float(await client.balance())
+    delta_5 = B_after_5 - B_start
+    logger.info(f"🏁 Итог 1+2+3+4+5: ${B_start:.2f} → ${B_after_5:.2f} (Δ {delta_5:+.2f})")
+    if delta_5 > 0:
+        if state is not None: state.last_delta = delta_5
+        print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_5:+.2f})\033[0m")
+        return True
+
+    if len(steps) < 6: return False
+
+    # ШАГ 6: Анализ (новый вход)
+    pair, deal_6 = await _open_step_6(client, pair, signal, steps, stopper, with_analysis=True, state=state, entry_price=entry_1)
+    if deal_6 is None: return False
+    await _wait_close(deal_6, stopper, state, client)
+    if stopper.requested(): return False
+
+    B_after_6 = float(await client.balance())
+    delta_6 = B_after_6 - B_start
+    logger.info(f"🏁 Итог 1+2+3+4+5+6: ${B_start:.2f} → ${B_after_6:.2f} (Δ {delta_6:+.2f})")
+    if delta_6 > 0:
+        if state is not None: state.last_delta = delta_6
+        print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_6:+.2f})\033[0m")
+        return True
+
+    if len(steps) < 7: return False
+
+    # ШАГ 7: Догон
+    pair, deal_7 = await _open_step_7(client, pair, signal, steps, stopper, with_analysis=False, state=state, entry_price=entry_1)
+    if deal_7 is None: return False
+    await _wait_close(deal_7, stopper, state, client)
+    if stopper.requested(): return False
+
+    B_final = float(await client.balance())
     delta_final = B_final - B_start
     logger.info(f"🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})")
-
-    if state is not None:
-        state.last_delta = delta_final
+    if state is not None: state.last_delta = delta_final
 
     if delta_final > 0:
-        logger.info(f"✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})")
-        print(f"\033[92m🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})\033[0m")
         print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta_final:+.2f})\033[0m")
         return True
     else:
-        logger.info(f"❌ СЕРИЯ МИНУС (Δ {delta_final:+.2f})")
-        print(f"\033[91m🏁 СЕРИЯ закрыта: ${B_start:.2f} → ${B_final:.2f} (Δ {delta_final:+.2f})\033[0m")
         print(f"\033[91m❌ СЕРИЯ МИНУС (Δ {delta_final:+.2f})\033[0m")
         return False
 
-
-
-#===================== СОСТОЯНИЕ ====================
-# ==================== STATE ====================
 class TraderState:
     """Состояние трейдера: пары, счётчики, лимиты."""
 
