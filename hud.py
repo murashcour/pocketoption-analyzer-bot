@@ -86,6 +86,18 @@ def render_hud(
     _denom = state.win_trades + state.loss_trades
     trade_wr = (state.win_trades / _denom * 100) if _denom > 0 else 0.0
 
+    # === PnL (от старта) ===
+    start_bal = getattr(state, "start_balance", 0.0)
+    pnl = balance - start_bal if start_bal > 0 else 0.0
+    
+    # Цвет для PnL (плюс - синий, минус - красный)
+    if pnl > 0:
+        pnl_color = "\033[94m"  # Синий (как просил)
+    elif pnl < 0:
+        pnl_color = "\033[91m"  # Красный
+    else:
+        pnl_color = GRAY
+
     # === Просадка ===
     dd_pct = 0.0
     if ref_balance > 0:
@@ -133,6 +145,10 @@ def render_hud(
 
     # Баланс
     lines.append(_line(f"Баланс:      {BOLD}${balance:.2f}{RESET}"))
+    # PnL
+    if start_bal > 0:
+        pnl_str = f"+${pnl:.2f}" if pnl > 0 else f"-${abs(pnl):.2f}" if pnl < 0 else "$0.00"
+        lines.append(_line(f"PnL (старт): {pnl_color}{pnl_str}{RESET}"))
     # Ref
     lines.append(_line(f"Ref:         ${ref_balance:.2f}"))
     # Просадка
@@ -184,8 +200,13 @@ def save_hud_to_json(
     # Просадка
     dd_pct = ((ref_balance - balance) / ref_balance * 100) if ref_balance > 0 else 0.0
 
+    start_bal = getattr(state, "start_balance", 0.0)
+    pnl = balance - start_bal if start_bal > 0 else 0.0
+
     data = {
         "timestamp": time.time(),
+        "pnl": round(pnl, 2),
+        "start_balance": round(start_bal, 2),
         "double_mode": double_mode,
         "wr_series": round(series_wr, 1),
         "wr_trades": round(trade_wr, 1),

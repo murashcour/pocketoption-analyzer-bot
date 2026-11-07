@@ -111,6 +111,21 @@ def main():
     # Баланс
     balance = data.get("balance", 0)
     lines.append(_line(f"Баланс:      {BOLD}${balance:.2f}{RESET}"))
+    
+    # PnL
+    pnl = data.get("pnl", 0)
+    start_bal = data.get("start_balance", 0)
+    if start_bal > 0:
+        if pnl > 0:
+            pnl_color = "\033[94m"  # Синий
+            pnl_str = f"+${pnl:.2f}"
+        elif pnl < 0:
+            pnl_color = "\033[91m"  # Красный
+            pnl_str = f"-${abs(pnl):.2f}"
+        else:
+            pnl_color = GRAY
+            pnl_str = "$0.00"
+        lines.append(_line(f"PnL (старт): {pnl_color}{pnl_str}{RESET}"))
 
     # Ref
     ref = data.get("ref_balance", 0)
