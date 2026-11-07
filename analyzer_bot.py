@@ -3412,7 +3412,8 @@ MENU_FIELDS = [
     ("averaging_max_steps",       "Усреднение: макс. ступеней",           "Averaging: max steps"),
     ("averaging_threshold_pct",   "Усреднение: порог догона (%)",         "Averaging: threshold (%)"),
     ("wait_candle_start_enabled", "Ждать начала свечи (True/False)",      "Wait candle start (True/False)"),
-]
+
+    ("analysis_steps",            "Ступени с анализом (1,3,6)",              "Analysis steps (1,3,6)"),]
 
 def _format_value(val) -> str:
     """Форматирует значение для отображения."""
