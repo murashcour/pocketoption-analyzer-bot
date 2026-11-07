@@ -3280,13 +3280,25 @@ class Trader:
 
                 self.state.skip_streak = 0
                 if CFG.get("averaging_enabled", False):
-                    is_win = await run_averaging_series(
-                        client, pair, signal, self.stopper, self.state, entry_price
-                    )
+                    try:
+                        is_win = await run_averaging_series(
+                            client, pair, signal, self.stopper, self.state, entry_price
+                        )
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"💥 КРИТИЧЕСКАЯ ОШИБКА В УСРЕДНЕНИИ: {e}")
+                        logger.error(traceback.format_exc())
+                        raise
                 else:
-                    is_win = await run_martingale_series(
-                        client, pair, signal, self.stopper, self.state, entry_price
-                    )
+                    try:
+                        is_win = await run_martingale_series(
+                            client, pair, signal, self.stopper, self.state, entry_price
+                        )
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"💥 КРИТИЧЕСКАЯ ОШИБКА В МАРТИНГЕЙЛЕ: {e}")
+                        logger.error(traceback.format_exc())
+                        raise
 
                 # === DOUBLE MARTINGALE LOGIC ===
                 if CFG.get("double_martingale_enabled", False):
