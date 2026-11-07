@@ -2078,9 +2078,14 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     steps = get_martingale_steps(B_start, double_mode=getattr(state, "double_mode_active", False))
     if state is not None: state.last_steps = steps
     
-    analysis_steps = CFG.get("analysis_steps", [1, 3, 6])
-    if isinstance(analysis_steps, str):
-        analysis_steps = [int(x.strip()) for x in analysis_steps.split(",") if x.strip().isdigit()]
+    # Универсальная проверка analysis_steps (список или строка)
+    raw_steps = CFG.get("analysis_steps", [1, 3, 6])
+    if isinstance(raw_steps, str):
+        analysis_steps = [int(x.strip()) for x in raw_steps.split(",") if x.strip().isdigit()]
+    elif isinstance(raw_steps, list):
+        analysis_steps = [int(x) for x in raw_steps if str(x).isdigit()]
+    else:
+        analysis_steps = [1, 3, 6]
     
     direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
     color_code = "\033[94m" if signal == "CALL" else "\033[91m"
@@ -2100,16 +2105,15 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
         step_num = i + 1
         if stopper.requested(): return False
 
+        # PATCH_031: Строгая распаковка переменных
         if step_num in analysis_steps and step_num > 1:
             logger.info(f"   🔍 ШАГ {step_num}: АНАЛИЗ (новый вход)")
-            current_pair, deal, current_entry = await _open_step_analysis(
-                client, current_pair, signal, current_entry, steps, stopper, state, step_idx=i
-            )
+            res = await _open_step_analysis(client, current_pair, signal, current_entry, steps, stopper, state, step_idx=i)
+            current_pair, deal, current_entry = res  # 3 переменные
         else:
-            logger.info(f"   🔄 ШАГ {step_num}: ДОГОН (или старт без перепроверки)")
-            current_pair, deal = await _open_step_chase(
-                client, current_pair, signal, steps, stopper, state, current_entry, step_idx=i
-            )
+            logger.info(f"   🔄 ШАГ {step_num}: ДОГОН")
+            res = await _open_step_chase(client, current_pair, signal, steps, stopper, state, current_entry, step_idx=i)
+            current_pair, deal = res  # 2 переменные
 
         if deal is None:
             logger.info(f"❌ {step_num}-я не открыта — серия закрыта")
