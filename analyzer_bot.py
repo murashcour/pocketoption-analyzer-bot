@@ -1869,6 +1869,89 @@ async def _open_step_7(client, pair: str, signal: str, steps: list, stopper,
 
 
 
+async def _open_step_chase(client, pair: str, signal: str, steps: list, stopper, state=None, entry_price: float = 0, step_idx: int = 1):
+    """Догон (без анализа). Возвращает (pair, deal)."""
+    # Проверка payout
+    pair, changed, ok = await _ensure_good_payout(client, pair, f"{step_idx+1}-я", state, stopper)
+    if not ok: 
+        return pair, None
+
+    logger.info(f"   📈 {step_idx+1}-я ступень СРАЗУ (догон)")
+    
+    # Убедимся, что entry_price - это float, а не кортеж
+    safe_entry = float(entry_price) if isinstance(entry_price, (int, float)) else 0.0
+    
+    deal = await _open_deal_raw(client, pair, step_idx, signal, steps, stopper, safe_entry, state)
+    return pair, deal
+
+
+async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
+    try:
+        B_start = float(await client.balance())
+    except Exception:
+        return False
+
+    steps = get_martingale_steps(B_start, double_mode=getattr(state, "double_mode_active", False))
+    if state is not None: state.last_steps = steps
+    
+    raw_steps = CFG.get("analysis_steps", [1, 3, 6])
+    if isinstance(raw_steps, str):
+        analysis_steps = [int(x.strip()) for x in raw_steps.split(",") if x.strip().isdigit()]
+    elif isinstance(raw_steps, list):
+        analysis_steps = [int(x) for x in raw_steps if str(x).isdigit()]
+    else:
+        analysis_steps = [1, 3, 6]
+    
+    direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
+    color_code = "\033[94m" if signal == "CALL" else "\033[91m"
+    reset_code = "\033[0m"
+
+    logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
+    logger.info(f"   Ступени: {steps} | Анализ на: {analysis_steps}")
+
+    if state is not None: state.last_signal = signal
+
+    current_pair = pair
+    current_entry = float(entry_price) if isinstance(entry_price, (int, float)) else 0.0
+    delta = 0.0
+
+    for i in range(len(steps)):
+        step_num = i + 1
+        if stopper.requested(): return False
+
+        if step_num in analysis_steps and step_num > 1:
+            logger.info(f"   🔍 ШАГ {step_num}: АНАЛИЗ (новый вход)")
+            res = await _open_step_analysis(client, current_pair, signal, current_entry, steps, stopper, state, step_idx=i)
+            current_pair, deal, current_entry = res
+        else:
+            logger.info(f"   🔄 ШАГ {step_num}: ДОГОН")
+            res = await _open_step_chase(client, current_pair, signal, steps, stopper, state, current_entry, step_idx=i)
+            current_pair, deal = res
+
+        if deal is None:
+            logger.info(f"❌ {step_num}-я не открыта — серия закрыта")
+            return False
+
+        await _wait_close(deal, stopper, state, client)
+        if stopper.requested(): return False
+
+        try:
+            B_now = float(await client.balance())
+        except Exception:
+            return False
+
+        delta = B_now - B_start
+        logger.info(f"🏁 Итог 1..{step_num}: ${B_start:.2f} → ${B_now:.2f} (Δ {delta:+.2f})")
+        
+        if delta > 0:
+            if state is not None: state.last_delta = delta
+            print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta:+.2f})\033[0m")
+            return True
+
+    if state is not None: state.last_delta = delta
+    print(f"\033[91m❌ СЕРИЯ МИНУС (Δ {delta:+.2f})\033[0m")
+    return False
+
 async def run_averaging_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
     """
     OPENED_DEALS: проверяем profit через get_opened_deals().
@@ -2061,83 +2144,6 @@ async def _open_step_analysis(client, pair: str, signal: str, entry_price: float
         return pair, deal, deal["entry"]
 
 
-async def _open_step_chase(client, pair: str, signal: str, steps: list, stopper, state=None, entry_price: float = 0, step_idx: int = 1):
-    pair, changed, ok = await _ensure_good_payout(client, pair, f"{step_idx+1}-я", state, stopper)
-    if not ok: return pair, None
-    logger.info(f"   📈 {step_idx+1}-я ступень СРАЗУ (догон)")
-    deal = await _open_deal_raw(client, pair, step_idx, signal, steps, stopper, entry_price, state)
-    return pair, deal
-
-
-async def run_martingale_series(client, pair: str, signal: str, stopper: StopChecker, state, entry_price: float = 0) -> bool:
-    try:
-        B_start = float(await client.balance())
-    except Exception:
-        return False
-
-    steps = get_martingale_steps(B_start, double_mode=getattr(state, "double_mode_active", False))
-    if state is not None: state.last_steps = steps
-    
-    # Универсальная проверка analysis_steps (список или строка)
-    raw_steps = CFG.get("analysis_steps", [1, 3, 6])
-    if isinstance(raw_steps, str):
-        analysis_steps = [int(x.strip()) for x in raw_steps.split(",") if x.strip().isdigit()]
-    elif isinstance(raw_steps, list):
-        analysis_steps = [int(x) for x in raw_steps if str(x).isdigit()]
-    else:
-        analysis_steps = [1, 3, 6]
-    
-    direction_str = "ВВЕРХ ⬆️ (CALL)" if signal == "CALL" else "ВНИЗ ⬇️ (PUT)"
-    color_code = "\033[94m" if signal == "CALL" else "\033[91m"
-    reset_code = "\033[0m"
-
-    logger.info(f"\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}")
-    logger.info(f"   Ступени: {steps} | Анализ на: {analysis_steps}")
-    print(f"{color_code}\n🎬 СЕРИЯ {direction_str} на {pair} | Баланс до = ${B_start:.2f}{reset_code}")
-
-    if state is not None: state.last_signal = signal
-
-    current_pair = pair
-    current_entry = entry_price
-    delta = 0.0
-
-    for i in range(len(steps)):
-        step_num = i + 1
-        if stopper.requested(): return False
-
-        # PATCH_031: Строгая распаковка переменных
-        if step_num in analysis_steps and step_num > 1:
-            logger.info(f"   🔍 ШАГ {step_num}: АНАЛИЗ (новый вход)")
-            res = await _open_step_analysis(client, current_pair, signal, current_entry, steps, stopper, state, step_idx=i)
-            current_pair, deal, current_entry = res  # 3 переменные
-        else:
-            logger.info(f"   🔄 ШАГ {step_num}: ДОГОН")
-            res = await _open_step_chase(client, current_pair, signal, steps, stopper, state, current_entry, step_idx=i)
-            current_pair, deal = res  # 2 переменные
-
-        if deal is None:
-            logger.info(f"❌ {step_num}-я не открыта — серия закрыта")
-            return False
-
-        await _wait_close(deal, stopper, state, client)
-        if stopper.requested(): return False
-
-        try:
-            B_now = float(await client.balance())
-        except Exception:
-            return False
-
-        delta = B_now - B_start
-        logger.info(f"🏁 Итог 1..{step_num}: ${B_start:.2f} → ${B_now:.2f} (Δ {delta:+.2f})")
-        
-        if delta > 0:
-            if state is not None: state.last_delta = delta
-            print(f"\033[92m✅ СЕРИЯ ПЛЮС (Δ {delta:+.2f})\033[0m")
-            return True
-
-    if state is not None: state.last_delta = delta
-    print(f"\033[91m❌ СЕРИЯ МИНУС (Δ {delta:+.2f})\033[0m")
-    return False
 
 
 class TraderState:
