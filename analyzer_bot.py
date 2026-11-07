@@ -846,11 +846,20 @@ async def check_payout(client, asset: str) -> Optional[float]:
 # ==================== MARTINGALE STEPS ====================
 def get_martingale_steps(balance: float, double_mode: bool = False) -> List[float]:
     """
-    Ступени мартингейла.
-    Учитывает balance_tiers (если включено) и double_mode (удвоение базы).
+    PATCH_035: Ступени мартингейла (защита от кривых типов в конфиге).
     """
-    count = max(1, min(int(CFG.get("martingale_steps_count", 2)),
-    ("analysis_steps",            "Ступени с анализом (1,3,6)",              "Analysis steps (1,3,6)"), 7))
+    # Бронебойное получение count
+    raw_count = CFG.get("martingale_steps_count", 2)
+    if isinstance(raw_count, (list, tuple)):
+        count = int(raw_count[0]) if raw_count else 2
+    elif isinstance(raw_count, str):
+        count = int(raw_count.strip()) if raw_count.strip().isdigit() else 2
+    else:
+        try:
+            count = int(raw_count)
+        except (ValueError, TypeError):
+            count = 2
+    count = max(1, min(count, 7))
 
     base_steps = []
     # === BALANCE TIERS ===
@@ -871,7 +880,7 @@ def get_martingale_steps(balance: float, double_mode: bool = False) -> List[floa
                 if t_min >= 1000:
                     logger.warning(f"⚠️ Баланс ≥ $1000. Базовая ставка: ${base_steps[0]:.2f}. Проверьте настройки!")
                 break
-    # === PATCH_024: принудительный fixed_steps при count >= 7 ===
+    # === FALLBACK ===
     if not base_steps:
         if CFG.get("use_fixed_for_long_martingale", True) and count >= 7:
             base_steps = list(CFG["fixed_steps"])[:count]
@@ -892,8 +901,6 @@ def get_martingale_steps(balance: float, double_mode: bool = False) -> List[floa
     return base_steps
 
 
-# ==================== STOP CHECKER ====================
-# ==================== STOP CHECKER ====================
 class StopChecker:
     """Обработка Ctrl+C, SIGTERM и stop.flag."""
     def __init__(self):
