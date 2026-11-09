@@ -39,6 +39,7 @@ from BinaryOptionsToolsV2 import PocketOptionAsync, PocketOptionError
 # PATCH_006: HUD-карточка
 try:
     from hud import print_hud, save_hud_to_json
+    from strategy_sr_cci import full_analysis_sr_cci
     HUD_AVAILABLE = True
 except ImportError:
     HUD_AVAILABLE = False
@@ -135,6 +136,9 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 # DEFAULT_CONFIG_V2
 DEFAULT_CONFIG = {
     "expiration": 60,
+    "strategy_mode": "Classic",
+    "sr_cci_left": 5,
+    "sr_cci_right": 3,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0],
@@ -751,6 +755,10 @@ def calc_squeeze(candles: List, period: int = 20, mult: float = 2.0) -> bool:
 
 async def full_analysis(client, pair: str):
     """Мульти-ТФ анализ: 1м + 5м + 15м + S/R + ATR. Возвращает (signal, price)."""
+    # PATCH_041: Если выбран режим SR_CCI, используем логику BinoView
+    if CFG.get("strategy_mode") == "SR_CCI":
+        return await full_analysis_sr_cci(client, pair, CFG, fetch_candles, get_current_price)
+
     # ===== БЫСТРАЯ ПРОВЕРКА: ТОЛЬКО 1м =====
     c1 = await fetch_candles(client, pair, 60, 100)
     if not c1 or len(c1) < 50:
