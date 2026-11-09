@@ -2248,7 +2248,7 @@ class TraderState:
         if is_win:
             self.win_trades += 1
             # PATCH_008: победа по попытке (1-4)
-            if 1 <= attempt <= 4:
+            if 1 <= attempt <= 7:
                 self.wins_by_attempt[attempt] += 1
         else:
             self.loss_trades += 1
