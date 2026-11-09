@@ -2263,7 +2263,7 @@ class TraderState:
         self.win_trades = 0
         self.loss_trades = 0
         # PATCH_008: победы по попыткам (1-я, 2-я, 3-я, 4-я)
-        self.wins_by_attempt = {1: 0, 2: 0, 3: 0, 4: 0}
+        self.wins_by_attempt = {i: 0 for i in range(1, 8)}  # PATCH_044
         # PATCH_009: статистика из closed_deals за сессию
         self.start_timestamp = 0.0  # время старта (Unix timestamp)
         self.start_balance = 0.0  # баланс при старте
@@ -2333,13 +2333,12 @@ class TraderState:
             self.hour_stats[hour]["losses"] += 1
 
     def record_trade(self, is_win: bool, attempt: int = 1):
-        """PATCH_008: записываем результат сделки (с попыткой)."""
+        """PATCH_044: победа по попытке (1-7) с защитой от KeyError."""
         self.total_trades += 1
         if is_win:
             self.win_trades += 1
-            # PATCH_008: победа по попытке (1-4)
             if 1 <= attempt <= 7:
-                self.wins_by_attempt[attempt] += 1
+                self.wins_by_attempt[attempt] = self.wins_by_attempt.get(attempt, 0) + 1
         else:
             self.loss_trades += 1
 
@@ -3151,7 +3150,7 @@ class Trader:
         self.state.win_trades = 0
         self.state.loss_trades = 0
         self.state.ties = 0
-        self.state.wins_by_attempt = {1: 0, 2: 0, 3: 0, 4: 0}
+        self.state.wins_by_attempt = {i: 0 for i in range(1, 8)}  # PATCH_044
         self.state.total_skips = 0
         self.state.total_pair_changes = 0
         logger.info(f"⏱ Статистика: start_timestamp={self.state.start_timestamp:.0f}, счётчики сброшены")
