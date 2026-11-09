@@ -201,6 +201,10 @@ DEFAULT_CONFIG = {
     "max_runtime_hours": 168,
     "max_trades_enabled": True,
     "max_trades_count": 100,
+    "adaptive_expiration_enabled": False,
+    "adaptive_expiration_mode": "atr",
+    "expiration_min": 60,
+    "expiration_max": 300,
     "max_error_streak": 5,
     "candle_start_max_sec": 8,
     "human_delay_sec": 0,
@@ -661,6 +665,28 @@ def check_volatility(candles: List, price: float) -> Tuple[bool, str]:
     return True, f"ATR={atr_percent:.3f}% OK"
 
 
+def get_adaptive_expiration(candles: List, price: float) -> int:
+    """PATCH_039: адаптивная экспирация по ATR."""
+    default = CFG.get("expiration", 60)
+    if CFG.get("adaptive_expiration_mode", "atr") != "atr":
+        return default
+    exp_min = CFG.get("expiration_min", 60)
+    exp_max = CFG.get("expiration_max", 300)
+    atr_val = atr(candles, CFG.get("atr_period", 14))
+    if atr_val is None or price <= 0:
+        return default
+    atr_pct = atr_val / price * 100
+    if atr_pct >= 0.05:
+        exp = 60
+    elif atr_pct >= 0.03:
+        exp = 120
+    elif atr_pct >= 0.015:
+        exp = 180
+    else:
+        exp = 240
+    return max(exp_min, min(exp, exp_max))
+
+
 # ==================== ПОЛНЫЙ АНАЛИЗ ====================
 # ==================== FULL ANALYSIS ====================
 
@@ -1027,11 +1053,23 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
             logger.warning(f"   ⚠ Payout слишком низкий ({live_payout}%) — отмена сделки.")
             return None
 
+        # PATCH_039: адаптивная экспирация
+        _expiration = CFG["expiration"]
+        if CFG.get("adaptive_expiration_enabled", False):
+            try:
+                _c1_adapt = await fetch_candles(client, p, 60, 30)
+                if _c1_adapt and len(_c1_adapt) >= CFG.get("atr_period", 14) + 1:
+                    _price_adapt = entry_price if entry_price > 0 else get_close(_c1_adapt[-1])
+                    _expiration = get_adaptive_expiration(_c1_adapt, _price_adapt)
+                    logger.info(f"   ⏱ PATCH_039: экспирация {_expiration} сек (ATR)")
+            except Exception as _e:
+                logger.debug(f"PATCH_039: adaptive error: {_e}")
+
         t0 = time.time()
         if sig == "CALL":
-            trade_id, _ = await client.buy(p, bet, CFG["expiration"])
+            trade_id, _ = await client.buy(p, bet, _expiration)
         else:
-            trade_id, _ = await client.sell(p, bet, CFG["expiration"])
+            trade_id, _ = await client.sell(p, bet, _expiration)
         dt = time.time() - t0
 
         deal = {
@@ -1042,7 +1080,8 @@ async def _open_deal_raw(client, p: str, step_idx: int, sig: str, steps: list, s
             "signal": sig,
             "open_time": time.time(),
             "step": step_idx + 1,
-            "payout": live_payout, # Сохраняем payout для истории
+            "payout": live_payout,
+            "expiration": _expiration,
         }
         # COUNT_BY_IDS: запоминаем ID сделки (если есть state)
         if state is not None:
@@ -1081,7 +1120,8 @@ async def _wait_close(deal: dict, stopper, state=None, client=None):
     WAIT_CLOSE_LOG: логирование state, client, trade_id.
     """
     last_open_time = deal["open_time"]
-    remaining = max(0, CFG["expiration"] - (time.time() - last_open_time)) + 5
+    _exp_wait = deal.get("expiration", CFG["expiration"])
+    remaining = max(0, _exp_wait - (time.time() - last_open_time)) + 5
     logger.info(f"⏳ Ждём закрытия сделки #{deal['step']} (~{remaining:.0f} сек)...")
     await stopper.sleep(remaining)
 
@@ -2229,6 +2269,8 @@ class TraderState:
         # === DOUBLE MARTINGALE ===
         self.double_mode_active = False
         self.double_pnl_start = 0.0
+        # PATCH_040: лимит сделок для HUD
+        self.max_trades = CFG.get("max_trades_count", 100) if CFG.get("max_trades_enabled", False) else None
 
     def current_pair(self) -> str:
         return self.pairs[self.current_idx]
@@ -3477,6 +3519,10 @@ MENU_FIELDS = [
     ("pause_after_losses",        "Пауза после N минусов",                "Pause after N losses"),
     ("max_trades_enabled",        "Автостоп по сделкам (True/False)",     "Auto-stop by trades (True/False)"),
     ("max_trades_count",          "Лимит сделок до автостопа",            "Trade limit for auto-stop"),
+    ("adaptive_expiration_enabled","Адаптивная экспирация (True/False)",   "Adaptive expiration (True/False)"),
+    ("adaptive_expiration_mode",  "Режим адаптации (atr)",                "Adaptive mode (atr)"),
+    ("expiration_min",            "Мин. экспирация (сек)",                "Min expiration (sec)"),
+    ("expiration_max",            "Макс. экспирация (сек)",               "Max expiration (sec)"),
 
     # ==================== Новости ====================
     ("news_enabled",              "Пауза при новостях (True/False)",      "News pause enabled (True/False)"),
