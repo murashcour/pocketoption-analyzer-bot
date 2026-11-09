@@ -3133,6 +3133,8 @@ class Trader:
         self.state = TraderState(pairs)
         # PATCH_009: запоминаем время старта
         self.state.start_timestamp = time.time()
+        # PATCH_042: часовой пояс для HUD
+        self.state.tz_offset_hours = CFG.get("log_timezone_offset_hours", 3)
         # PATCH_029: запоминаем стартовый баланс для PnL
         self.state.start_balance = balance
         # PATCH_020: обнуляем статистику при запуске

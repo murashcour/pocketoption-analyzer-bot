@@ -53,6 +53,20 @@ def _delta_color(delta: float) -> str:
         return RED
     return GRAY
 
+def _fmt_uptime(sec: int) -> str:
+    """PATCH_042: форматирует аптайм."""
+    if sec < 0: sec = 0
+    if sec < 60:
+        return f"{sec}с"
+    m, s = divmod(sec, 60)
+    if m < 60:
+        return f"{m}м {s:02d}с"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h}ч {m:02d}м"
+    d, h = divmod(h, 24)
+    return f"{d}д {h}ч {m:02d}м"
+
 
 def render_hud(
     state,
@@ -203,9 +217,27 @@ def save_hud_to_json(
     start_bal = getattr(state, "start_balance", 0.0)
     pnl = balance - start_bal if start_bal > 0 else 0.0
 
+    # PATCH_042: старт и аптайм
+    start_ts = getattr(state, "start_timestamp", 0) or 0
+    tz_offset_h = getattr(state, "tz_offset_hours", 3)
+    if start_ts > 0:
+        from datetime import datetime, timezone, timedelta
+        _tz = timezone(timedelta(hours=tz_offset_h))
+        start_time_str = datetime.fromtimestamp(start_ts, tz=_tz).strftime("%d.%m %H:%M")
+        start_tz_str = "МСК" if tz_offset_h == 3 else f"UTC{tz_offset_h:+d}"
+        uptime_sec = int(time.time() - start_ts)
+        uptime_str = _fmt_uptime(uptime_sec)
+    else:
+        start_time_str = "-"
+        start_tz_str = ""
+        uptime_str = "-"
+
     data = {
         "timestamp": time.time(),
         "pnl": round(pnl, 2),
+        "start_time_str": start_time_str,
+        "start_tz_str": start_tz_str,
+        "uptime_str": uptime_str,
         "start_balance": round(start_bal, 2),
         "double_mode": double_mode,
         "wr_series": round(series_wr, 1),

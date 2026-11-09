@@ -86,6 +86,15 @@ def main():
         title += f" {MAGENTA}[УДВОЕНИЕ]{RESET}"
     lines.append(_line(title))
 
+    # PATCH_042: старт и аптайм
+    st_time = data.get("start_time_str", "")
+    st_tz = data.get("start_tz_str", "")
+    up_str = data.get("uptime_str", "")
+    if st_time and st_time != "-":
+        tz_label = f" ({st_tz})" if st_tz else ""
+        lines.append(_line(f"Старт:       {st_time}{tz_label}"))
+        lines.append(_line(f"Работает:    {up_str}"))
+
     lines.append("╠" + "═" * (W + 2) + "╣")
 
     # WR (серии)
