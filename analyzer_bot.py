@@ -175,6 +175,11 @@ DEFAULT_CONFIG = {
     "pair_stats_min_winrate": 49.0,
     "atr_period": 14,
     "atr_min_percent": 0.015,
+    "cci_filter_enabled": False,
+    "cci_period": 20,
+    "cci_oversold": -100,
+    "cci_overbought": 100,
+    "cci_block_opposite": True,
     "tf_3m_rsi_bull": 54,
     "tf_3m_rsi_bear": 46,
     "tf_3m_neutral_blocks": False,
@@ -354,6 +359,20 @@ def atr(candles: List, period: int = 14) -> Optional[float]:
         tr = max(h - l, abs(h - prev_close), abs(l - prev_close))
         trs.append(tr)
     return sum(trs[-period:]) / period
+
+
+def cci(candles: List, period: int = 20) -> Optional[float]:
+    """Commodity Channel Index (PATCH_038)."""
+    if len(candles) < period:
+        return None
+    tps = []
+    for c in candles[-period:]:
+        tps.append((get_high(c) + get_low(c) + get_close(c)) / 3.0)
+    sma_tp = sum(tps) / period
+    mad = sum(abs(tp - sma_tp) for tp in tps) / period
+    if mad == 0:
+        return 0.0
+    return (tps[-1] - sma_tp) / (0.015 * mad)
 
 
 # ==================== РАБОТА СО СВЕЧАМИ ====================
@@ -737,6 +756,19 @@ async def full_analysis(client, pair: str):
     if not ok_sr:
         logger.info(f"   [{pair}] S/R блокирует сделку")
         return None, None, "SR"
+
+    # PATCH_038: CCI фильтр (опционально)
+    if CFG.get("cci_filter_enabled", False):
+        cci_val = cci(c1, CFG.get("cci_period", 20))
+        if cci_val is not None:
+            logger.info(f"   [CCI] {cci_val:.1f}")
+            if CFG.get("cci_block_opposite", True):
+                if sig_1m == "CALL" and cci_val > CFG.get("cci_overbought", 100):
+                    logger.info(f"   [CCI] перекуп ({cci_val:.1f}) — блок CALL")
+                    return None, None, "CCI"
+                if sig_1m == "PUT" and cci_val < CFG.get("cci_oversold", -100):
+                    logger.info(f"   [CCI] перепродан ({cci_val:.1f}) — блок PUT")
+                    return None, None, "CCI"
 
     # ADX_VWAP: ADX фильтр (мягкий)
     if CFG.get("adx_filter_enabled", False):
@@ -3430,6 +3462,10 @@ MENU_FIELDS = [
     # ==================== Волатильность ====================
     ("atr_period",                "ATR период",                           "ATR period"),
     ("atr_min_percent",           "ATR мин. волатильность (%)",           "ATR min volatility (%)"),
+    ("cci_filter_enabled",        "CCI фильтр (True/False)",              "CCI filter enabled (True/False)"),
+    ("cci_period",                "CCI период",                           "CCI period"),
+    ("cci_oversold",              "CCI перепрод (<X)",                    "CCI oversold (<X)"),
+    ("cci_overbought",            "CCI перекуп (>X)",                     "CCI overbought (>X)"),
 
     # ==================== Пропуски ====================
     ("skip_before_change_plus",   "Пропусков после +серии",               "Skips after winning series"),
