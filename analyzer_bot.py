@@ -194,6 +194,8 @@ DEFAULT_CONFIG = {
     "news_refresh_hours": 4,
     "news_fallback_stop": True,
     "max_runtime_hours": 168,
+    "max_trades_enabled": True,
+    "max_trades_count": 100,
     "max_error_streak": 5,
     "candle_start_max_sec": 8,
     "human_delay_sec": 0,
@@ -3096,6 +3098,18 @@ class Trader:
         last_payout_check = time.time()
 
         while True:
+            # === АВТОСТОП: ЛИМИТ СДЕЛОК ===
+            if CFG.get("max_trades_enabled", False):
+                _max_trades = int(CFG.get("max_trades_count", 100))
+                if self.state and self.state.total_trades >= _max_trades:
+                    logger.warning(
+                        f"⏹ Автостоп: достигнут лимит сделок "
+                        f"({self.state.total_trades}/{_max_trades})"
+                    )
+                    if self.state:
+                        logger.info(self.state.summary())
+                    return
+
             # === АВТОСТОП 24 ЧАСА ===
             if time.time() - self.start_time >= self.max_runtime_sec:
                 hours = self.max_runtime_sec / 3600
@@ -3425,6 +3439,8 @@ MENU_FIELDS = [
     ("max_drawdown_percent",      "Макс. просадка (%)",                   "Max drawdown (%)"),
     ("drawdown_max_count",        "Макс. кол-во просадок",                "Max drawdown count"),
     ("pause_after_losses",        "Пауза после N минусов",                "Pause after N losses"),
+    ("max_trades_enabled",        "Автостоп по сделкам (True/False)",     "Auto-stop by trades (True/False)"),
+    ("max_trades_count",          "Лимит сделок до автостопа",            "Trade limit for auto-stop"),
 
     # ==================== Новости ====================
     ("news_enabled",              "Пауза при новостях (True/False)",      "News pause enabled (True/False)"),
