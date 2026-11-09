@@ -2000,6 +2000,8 @@ async def _open_step_analysis(client, pair: str, signal: str, entry_price: float
             if new_sig != signal:
                 logger.info(f"   ⚠ {step_idx+1}-я (анализ): сигнал изменился ({signal} → {new_sig}) — открываю новый")
             signal = new_sig
+            if state is not None:
+                state.last_signal = signal  # PATCH_043: запоминаем обновлённый сигнал
             safe_entry = float(new_entry) if isinstance(new_entry, (int, float)) else 0.0
 
         await stopper.sleep(1)
@@ -2067,6 +2069,10 @@ async def run_martingale_series(client, pair: str, signal: str, stopper: StopChe
     for i in range(len(steps)):
         step_num = i + 1
         if stopper.requested(): return False
+
+        # PATCH_043: подхватываем обновлённый сигнал из state (после анализа)
+        if state is not None and getattr(state, "last_signal", None):
+            signal = state.last_signal
 
         if step_num in analysis_steps and step_num > 1:
             logger.info(f"   🔍 ШАГ {step_num}: АНАЛИЗ")
