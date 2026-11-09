@@ -225,6 +225,7 @@ def save_hud_to_json(
         "total_skips": state.total_skips,
         "total_pair_changes": state.total_pair_changes,
         "wins_by_attempt": getattr(state, "wins_by_attempt", {}),
+        "max_trades": getattr(state, "max_trades", None),
     }
 
     try:

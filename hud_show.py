@@ -153,6 +153,10 @@ def main():
 
     # Серий
     lines.append(_line(f"Серий:       {data.get('total_series', 0)}"))
+    # Сделок (PATCH_040)
+    max_tr = data.get("max_trades")
+    if max_tr:
+        lines.append(_line(f"Сделок:      {data.get('total_trades', 0)} / {max_tr}"))
     # Пропусков
     lines.append(_line(f"Пропусков:   {data.get('total_skips', 0)}"))
     # Смен пар
