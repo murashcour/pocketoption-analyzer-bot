@@ -137,6 +137,7 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 DEFAULT_CONFIG = {
     "expiration": 60,
     "strategy_mode": "Classic",
+    "sr_cci_no_signal_pause_sec": 30,
     "sr_cci_left": 5,
     "sr_cci_right": 3,
     "base_percent": 1.0,
@@ -2604,9 +2605,8 @@ def check_news_pause():
 import json as _json
 import os as _os
 
-def _load_pair_stats(min_winrate: float = 55.0):
-    """Загружает pair_stats.json и возвращает dict {'PAIR': winrate}."""
-    p = _os.path.join(BASE_DIR, "pair_stats.json")
+def _load_pair_stats(min_winrate: float = 55.0, filename: str = "pair_stats.json"):
+    p = _os.path.join(BASE_DIR, filename)
     if not _os.path.exists(p):
         logger.warning("pair_stats.json не найден — торгуем без фильтра")
         return {}
@@ -2636,10 +2636,54 @@ def _load_pair_stats(min_winrate: float = 55.0):
     logger.info(f"📊 pair_stats: {len(good)}/{len(data)} пар с Winrate ≥ {min_winrate}%")
     return good
 
+
+# ==================== ОБНОВЛЕНИЕ СТАТИСТИКИ SR_CCI (PATCH_048) ====================
+def update_sr_cci_stats_if_needed():
+    import csv
+    import os
+    from pathlib import Path
+    from strategy_sr_cci import backtest_sr_cci
+
+    stats_path = os.path.join(BASE_DIR, "pair_stats_sr_cci.json")
+    history_dir = os.path.join(BASE_DIR, "history")
+    history_real_dir = os.path.join(BASE_DIR, "history_real")
+
+    if os.path.exists(stats_path) and (time.time() - os.path.getmtime(stats_path)) < 5 * 3600:
+        logger.info(f"📊 pair_stats_sr_cci.json свежий — пропуск")
+        return
+
+    logger.info("🔄 Пересчёт статистики для SR_CCI...")
+    stats = {}
+
+    for directory in [history_dir, history_real_dir]:
+        if not os.path.exists(directory): continue
+        for fname in os.listdir(directory):
+            if not fname.endswith(".csv"): continue
+            pair = fname[:-4]
+            fpath = os.path.join(directory, fname)
+            candles = []
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    for row in csv.DictReader(f):
+                        candles.append({"open": float(row["open"]), "high": float(row["high"]), "low": float(row["low"]), "close": float(row["close"])})
+            except Exception: continue
+
+            if len(candles) < 100: continue
+            wins, losses = backtest_sr_cci(candles, CFG)
+            total = wins + losses
+            if total > 0:
+                stats[pair] = {"wins": wins, "losses": losses, "winrate": (wins / total) * 100}
+                logger.info(f"   {pair}: {wins}/{total} ({(wins/total)*100:.1f}%)")
+
+    try:
+        with open(stats_path, "w", encoding="utf-8") as f: json.dump(stats, f, indent=2)
+        logger.info(f"✅ pair_stats_sr_cci.json сохранён ({len(stats)} пар)")
+    except Exception as e: logger.error(f"❌ Ошибка сохранения: {e}")
+
 def _filter_pairs_by_stats(pairs: list, min_winrate: float = 55.0):
-    if not CFG.get("pair_stats_enabled", False):
-        return pairs
-    good = _load_pair_stats(min_winrate)
+    if not CFG.get("pair_stats_enabled", False): return pairs
+    stats_file = "pair_stats_sr_cci.json" if CFG.get("strategy_mode") == "SR_CCI" else "pair_stats.json"
+    good = _load_pair_stats(min_winrate, filename=stats_file)
     if not good:
         return pairs
     filtered = [p for p in pairs if p in good]
@@ -3173,6 +3217,9 @@ class Trader:
             logger.info(f"🎮 РУЧНОЙ РЕЖИМ: {self.manual_mode}")
             await run_manual_mode(client, self.state, self.stopper, self.manual_mode)
             return
+        if CFG.get("strategy_mode") == "SR_CCI":
+            update_sr_cci_stats_if_needed()
+
         logger.info(f"💡 Остановка: Ctrl+C или создай файл stop.flag")
         logger.info(
             f"📊 Настройки: EXPIRATION={CFG['expiration']}s, "
@@ -3369,6 +3416,13 @@ class Trader:
                                   # Анализ
                 signal, entry_price, reason = await full_analysis(client, pair)
                 if signal is None:
+                    # PATCH_047: для SR_CCI — пауза при пропуске (не менять пару сразу)
+                    if CFG.get("strategy_mode") == "SR_CCI":
+                        _pause = CFG.get("sr_cci_no_signal_pause_sec", 30)
+                        logger.info(f"   ⏸ SR_CCI: нет сигнала — пауза {_pause}с")
+                        await self.stopper.sleep(_pause)
+                        continue
+
                     # Пауза — только при NO_DATA (API не отдаёт свечи)
                     if reason == "NO_DATA":
                         self.empty_candles_count += 1
@@ -3492,6 +3546,7 @@ class Trader:
 MENU_FIELDS = [
     # ==================== Основные ====================
     ("strategy_mode",             "Режим (Classic / SR_CCI)",             "Strategy mode (Classic / SR_CCI)"),
+    ("sr_cci_no_signal_pause_sec", "SR_CCI: пауза при пропуске (сек)",      "SR_CCI: no-signal pause (sec)"),
     ("sr_cci_left",               "SR_CCI: пивот слева (L)",              "SR_CCI: left bars"),
     ("sr_cci_right",              "SR_CCI: пивот справа (R)",             "SR_CCI: right bars"),
     ("expiration",                "Экспирация сделки (сек)",              "Trade expiration (sec)"),

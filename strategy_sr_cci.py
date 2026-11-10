@@ -99,23 +99,74 @@ async def full_analysis_sr_cci(client, pair: str, cfg: dict, fetch_candles, get_
         return None, None, "NO_ZONES"
 
     signal = None
-    reason = "OK"
-    
-    # Проверяем последние 3 свечи на касание
-    for z in zones:
-        # Зона актуальна, если цена её ещё не пробила (BinoView keepUntilBreak)
-        # Для простоты проверяем касание текущей цены
-        if z["side"] == "support" and z["bot"] <= price <= z["top"]:
-            if cci_val < cfg.get("cci_oversold", -100):
-                signal = "CALL"
-                logger.info(f"   [SR_CCI] Касание поддержки {z['bot']:.5f}-{z['top']:.5f} + CCI {cci_val:.1f} -> CALL")
-                break
-        elif z["side"] == "resistance" and z["bot"] <= price <= z["top"]:
-            if cci_val > cfg.get("cci_overbought", 100):
-                signal = "PUT"
-                logger.info(f"   [SR_CCI] Касание сопротивления {z['bot']:.5f}-{z['top']:.5f} + CCI {cci_val:.1f} -> PUT")
-                break
+
+    # PATCH_047: касание зоны за последние 3 свечи
+    lookback = 3
+    recent = c1[-lookback:]
+    touched_support = False
+    touched_resistance = False
+    sup_zone = None
+    res_zone = None
+
+    for c in recent:
+        c_low = get_low(c)
+        c_high = get_high(c)
+        for z in zones:
+            if z["side"] == "support" and c_low <= z["top"] and c_high >= z["bot"]:
+                touched_support = True
+                sup_zone = z
+            if z["side"] == "resistance" and c_high >= z["bot"] and c_low <= z["top"]:
+                touched_resistance = True
+                res_zone = z
+
+    if touched_support and cci_val < cfg.get("cci_oversold", -100):
+        signal = "CALL"
+        logger.info(f"   [SR_CCI] Касание поддержки (за {lookback} св.) + CCI {cci_val:.1f} -> CALL")
+    elif touched_resistance and cci_val > cfg.get("cci_overbought", 100):
+        signal = "PUT"
+        logger.info(f"   [SR_CCI] Касание сопротивления (за {lookback} св.) + CCI {cci_val:.1f} -> PUT")
 
     if signal:
         return signal, price, "OK"
     return None, None, "NO_SIGNAL"
+
+# ==================== БЭКТЕСТ ДЛЯ SR_CCI (PATCH_048) ====================
+def backtest_sr_cci(candles: list, cfg: dict) -> tuple:
+    wins = 0
+    losses = 0
+    expiry = 1
+    if len(candles) < 50: return 0, 0
+
+    for i in range(50, len(candles) - expiry - 1):
+        history = candles[:i+1]
+        zones = find_zones(history, left=cfg.get("sr_cci_left", 5), right=cfg.get("sr_cci_right", 3))
+        if not zones: continue
+        cci_val = calc_cci(history, 14)
+        if cci_val is None: continue
+        
+        price = get_close(history[-1])
+        signal = None
+        lookback = 3
+        recent = history[-lookback:]
+        touched_support = False
+        touched_resistance = False
+        
+        for c in recent:
+            c_low = get_low(c); c_high = get_high(c)
+            for z in zones:
+                if z["side"] == "support" and c_low <= z["top"] and c_high >= z["bot"]: touched_support = True
+                if z["side"] == "resistance" and c_high >= z["bot"] and c_low <= z["top"]: touched_resistance = True
+                    
+        if touched_support and cci_val < cfg.get("cci_oversold", -100): signal = "CALL"
+        elif touched_resistance and cci_val > cfg.get("cci_overbought", 100): signal = "PUT"
+            
+        if signal:
+            entry_price = get_close(history[-1])
+            exit_price = get_close(candles[i + expiry])
+            if signal == "CALL":
+                if exit_price > entry_price: wins += 1
+                else: losses += 1
+            elif signal == "PUT":
+                if exit_price < entry_price: wins += 1
+                else: losses += 1
+    return wins, losses
