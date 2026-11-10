@@ -3491,6 +3491,9 @@ class Trader:
 # Формат: (key, ru_description, en_description)
 MENU_FIELDS = [
     # ==================== Основные ====================
+    ("strategy_mode",             "Режим (Classic / SR_CCI)",             "Strategy mode (Classic / SR_CCI)"),
+    ("sr_cci_left",               "SR_CCI: пивот слева (L)",              "SR_CCI: left bars"),
+    ("sr_cci_right",              "SR_CCI: пивот справа (R)",             "SR_CCI: right bars"),
     ("expiration",                "Экспирация сделки (сек)",              "Trade expiration (sec)"),
     ("fixed_steps",               "Фиксированные ставки (USD)",           "Fixed bets (USD)"),
     ("martingale_steps_count",    "Ступеней в серии (1-4)",               "Steps in series (1-4)"),
