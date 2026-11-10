@@ -237,3 +237,15 @@ Project built with DeepSeek AI.
 
 This project is not financial advice. Binary options trading
 involves high risk.
+
+
+## 🤝 Using with AI (DeepSeek and other LLMs)
+
+This project was built in collaboration with **DeepSeek AI** (deepseek.com). We highly recommend using modern LLMs (DeepSeek, ChatGPT, Claude) for further development and maintenance:
+
+- **Log analysis:** Copy the `analyzer_bot.log` and ask AI to find anomalies, drawdown causes, or freezes.
+- **Strategy improvements:** AI can quickly write new filters (e.g., RSI + Bollinger Bands) or calculate martingale expected value.
+- **Writing patches:** If you want to change the logic but don't know Python, AI can generate a ready-to-use `patch_*.py` with backup and syntax validation.
+- **Backtesting:** AI can write scripts to test strategies on historical data (like it was done for `backtest_sr_cci`).
+
+*Tip:* The more context (files `config.json`, logs, chart screenshots) you provide to AI, the more accurate its recommendations will be.
