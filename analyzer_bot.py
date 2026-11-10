@@ -2669,6 +2669,11 @@ def update_sr_cci_stats_if_needed():
             except Exception: continue
 
             if len(candles) < 100: continue
+            
+            # PATCH_049: ограничиваем историю 2000 свечами для скорости (было O(N^2))
+            if len(candles) > 2000:
+                candles = candles[-2000:]
+                
             wins, losses = backtest_sr_cci(candles, CFG)
             total = wins + losses
             if total > 0:
