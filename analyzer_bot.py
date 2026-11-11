@@ -137,6 +137,9 @@ SSID_FILE = os.path.expanduser("~/.po_ssid")
 DEFAULT_CONFIG = {
     "expiration": 60,
     "strategy_mode": "Classic",
+    "history_window_minutes": 1440,        # 24ч для бэктеста (последние N минут)
+    "recalc_interval_sec": 18000,          # 5ч — интервал пересчёта
+    "recalc_pause_sec": 1800,              # 30м — пауза во время пересчёта
     "sr_cci_no_signal_pause_sec": 30,
     "sr_cci_left": 5,
     "sr_cci_right": 3,
@@ -2669,9 +2672,10 @@ def update_sr_cci_stats_if_needed():
 
             if len(candles) < 100: continue
             
-            # PATCH_049: ограничиваем историю 2000 свечами для скорости (было O(N^2))
-            if len(candles) > 2000:
-                candles = candles[-2000:]
+            # PATCH_057: берём последние N минут (24ч = 1440)
+            history_min = CFG.get("history_window_minutes", 1440)
+            if len(candles) > history_min:
+                candles = candles[-history_min:]
                 
             wins, losses = backtest_sr_cci(candles, CFG)
             total = wins + losses
@@ -3514,6 +3518,31 @@ class Trader:
                     pass
 
                 await self.stopper.sleep(5)
+
+                # === PATCH_057: пауза и пересчёт раз в 5 часов ===
+                if not hasattr(self, "_last_recalc"):
+                    self._last_recalc = self.start_time
+                recalc_int = CFG.get("recalc_interval_sec", 18000)
+                if time.time() - self._last_recalc >= recalc_int:
+                    pause_sec = CFG.get("recalc_pause_sec", 1800)
+                    logger.warning(f"⏸ PATCH_057: пауза {pause_sec//60} мин для пересчёта статистики...")
+                    await self.stopper.sleep(pause_sec)
+                    
+                    if CFG.get("strategy_mode") == "SR_CCI":
+                        # Принудительный пересчёт (игнорируем проверку "файл свежий")
+                        recent_path = os.path.join(BASE_DIR, "pair_stats_recent.json")
+                        if os.path.exists(recent_path):
+                            os.remove(recent_path)  # удаляем old recent
+                        update_sr_cci_stats_if_needed()
+                        
+                        # Перезагрузка пар после пересчёта
+                        new_pairs = await load_currency_pairs(client)
+                        if new_pairs:
+                            self.state.update_pairs(new_pairs)
+                            logger.info(f"🔄 PATCH_057: список пар обновлён ({len(new_pairs)} пар)")
+                    
+                    self._last_recalc = time.time()
+                    logger.info("▶ PATCH_057: пауза окончена, продолжаем торговлю")
 
             except KeyboardInterrupt:
                 break
