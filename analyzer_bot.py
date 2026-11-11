@@ -1322,11 +1322,10 @@ async def _ensure_good_payout(client, pair: str, step_name: str, state, stopper)
             state.change_pair(f"{step_name}: payout вне диапазона")
             pair = state.current_pair()
             # SERVER_FIX: проверяем, реально ли сменилась пара
-            if pair != _old_pair:
-                changed = True
-            else:
-                logger.warning(f"   ⚠ {step_name}: пара не сменилась, но payout плохой — отмена")
+            if pair == _old_pair:
+                logger.warning(f"   ⚠ {step_name}: пара не сменилась ({pair}) — отмена серии")
                 return pair, False, False
+            changed = True
 
         attempts += 1
         if attempts >= max_attempts:
@@ -2691,6 +2690,12 @@ def _filter_pairs_by_stats(pairs: list, min_winrate: float = 55.0):
     good = _load_pair_stats(min_winrate, filename=stats_file)
     if not good:
         return pairs
+    
+    # PATCH_053: если после WR-фильтра < 3 пар — торгуем без фильтра
+    pre_filtered = [p for p in pairs if p in good]
+    if len(pre_filtered) < 3:
+        logger.warning(f"⚠ После WR-фильтра осталось {len(pre_filtered)} пар (< 3) — торгуем без фильтра")
+        return pairs
     filtered = [p for p in pairs if p in good]
     
     # NEW_FEATURES: Fallback — если < 3 пар, берём топ-5 по Winrate
@@ -3176,6 +3181,10 @@ class Trader:
             f"макс {CFG['drawdown_max_count']} просадок"
         )
 
+        # PATCH_054: пересчёт статистики ДО загрузки пар (чтобы использовать свежий файл)
+        if CFG.get("strategy_mode") == "SR_CCI":
+            update_sr_cci_stats_if_needed()
+
         pairs = await load_currency_pairs(client)
         if not pairs:
             logger.error(
@@ -3222,9 +3231,6 @@ class Trader:
             logger.info(f"🎮 РУЧНОЙ РЕЖИМ: {self.manual_mode}")
             await run_manual_mode(client, self.state, self.stopper, self.manual_mode)
             return
-        if CFG.get("strategy_mode") == "SR_CCI":
-            update_sr_cci_stats_if_needed()
-
         logger.info(f"💡 Остановка: Ctrl+C или создай файл stop.flag")
         logger.info(
             f"📊 Настройки: EXPIRATION={CFG['expiration']}s, "
