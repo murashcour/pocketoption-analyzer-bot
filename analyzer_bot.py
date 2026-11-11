@@ -2694,20 +2694,16 @@ def _filter_pairs_by_stats(pairs: list, min_winrate: float = 55.0):
     # PATCH_053: если после WR-фильтра < 3 пар — торгуем без фильтра
     pre_filtered = [p for p in pairs if p in good]
     if len(pre_filtered) < 3:
-        logger.warning(f"⚠ После WR-фильтра осталось {len(pre_filtered)} пар (< 3) — торгуем без фильтра")
+        logger.warning(f"⚠ После WR-фильтра осталось {len(pre_filtered)} пар (< 3) — но торгуем только их")
+        if pre_filtered:
+            return pre_filtered  # PATCH_055: лучше 1-2 хорошие, чем 84 плохие
+        logger.warning(f"⚠ Нет пар после WR — откат на все payout-пары")
         return pairs
     filtered = [p for p in pairs if p in good]
     
     # NEW_FEATURES: Fallback — если < 3 пар, берём топ-5 по Winrate
-    if len(filtered) < 3:
-        logger.warning(f"⚠ После фильтра осталось {len(filtered)} пар — берём топ-5 по Winrate")
-        # Сортируем все пары по Winrate (даже если ниже порога)
-        all_stats = _load_pair_stats(0.0)  # все пары
-        sorted_by_wr = sorted(all_stats.items(), key=lambda x: x[1], reverse=True)
-        fallback = [p for p, wr in sorted_by_wr[:5] if p in pairs]
-        if fallback:
-            logger.info(f"🔄 Fallback: {fallback}")
-            return fallback
+    # PATCH_055: не откатываемся на все пары — лучше 1-2 хорошие
+    
     
     if not filtered:
         logger.warning("⚠ Фильтр отсёк все пары — откат к полному списку")
