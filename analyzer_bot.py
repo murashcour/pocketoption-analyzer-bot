@@ -143,6 +143,8 @@ DEFAULT_CONFIG = {
     "sr_cci_no_signal_pause_sec": 30,
     "sr_cci_left": 5,
     "sr_cci_right": 3,
+    "sr_cci_trend_filter_enabled": False,
+    "sr_cci_trend_tf": 300,
     "base_percent": 1.0,
     "min_balance_for_percent": 100,
     "fixed_steps": [1.0],
@@ -3580,79 +3582,62 @@ class Trader:
 
 # Формат: (key, ru_description, en_description)
 MENU_FIELDS = [
-    # ==================== Основные ====================
-    ("strategy_mode",             "Режим (Classic / SR_CCI)",             "Strategy mode (Classic / SR_CCI)"),
-    ("sr_cci_no_signal_pause_sec", "SR_CCI: пауза при пропуске (сек)",      "SR_CCI: no-signal pause (sec)"),
-    ("sr_cci_left",               "SR_CCI: пивот слева (L)",              "SR_CCI: left bars"),
-    ("sr_cci_right",              "SR_CCI: пивот справа (R)",             "SR_CCI: right bars"),
-    ("expiration",                "Экспирация сделки (сек)",              "Trade expiration (sec)"),
-    ("fixed_steps",               "Фиксированные ставки (USD)",           "Fixed bets (USD)"),
-    ("martingale_steps_count",    "Ступеней в серии (1-4)",               "Steps in series (1-4)"),
-    ("pure_martingale",           "Догон 2-й по сигналу (True/False)",    "Chase 2nd by signal (True/False)"),
-    ("manual_signal_pause_sec",   "Пауза после сигнала (сек)",            "Pause after signal (sec)"),
-
-    # ==================== Payout ====================
-    ("payout_min_otc",            "Мин. payout OTC (%)",                  "Min OTC payout (%)"),
-    ("payout_max_otc",            "Макс. payout OTC (%)",                 "Max OTC payout (%)"),
-    ("payout_recheck_sec",        "Перепроверка payout (сек)",            "Payout recheck (sec)"),
-
-    # ==================== Real-пары ====================
-    ("include_real",              "Включать Real-пары (True/False)",      "Include Real pairs (True/False)"),
-
-    # ==================== Анализ 1м ====================
-    ("min_confirmations",         "Мин. подтверждений сигнала",           "Min signal confirmations"),
-    ("rsi_overbought",            "RSI перекуп (>X — пропуск)",           "RSI overbought (>X — skip)"),
-    ("rsi_oversold",              "RSI перепрод (<X — пропуск)",          "RSI oversold (<X — skip)"),
-    ("rsi_bull_min",              "RSI бычий порог (>X — CALL)",          "RSI bullish min (>X — CALL)"),
-    ("rsi_bear_max",              "RSI медвежий порог (<X — PUT)",        "RSI bearish max (<X — PUT)"),
-
-    # ==================== S/R ====================
-    ("sr_lookback",               "S/R lookback (свечей)",                "S/R lookback (candles)"),
-    ("sr_proximity_percent",      "S/R близость к уровню (%)",            "S/R proximity to level (%)"),
-
-    # ==================== Волатильность ====================
-    ("atr_period",                "ATR период",                           "ATR period"),
-    ("atr_min_percent",           "ATR мин. волатильность (%)",           "ATR min volatility (%)"),
-    ("cci_filter_enabled",        "CCI фильтр (True/False)",              "CCI filter enabled (True/False)"),
-    ("cci_period",                "CCI период",                           "CCI period"),
-    ("cci_oversold",              "CCI перепрод (<X)",                    "CCI oversold (<X)"),
-    ("cci_overbought",            "CCI перекуп (>X)",                     "CCI overbought (>X)"),
-
-    # ==================== Пропуски ====================
-    ("skip_before_change_plus",   "Пропусков после +серии",               "Skips after winning series"),
-    ("skip_before_change_minus",  "Пропусков после -серии",               "Skips after losing series"),
-
-    # ==================== Просадка ====================
-    ("max_drawdown_percent",      "Макс. просадка (%)",                   "Max drawdown (%)"),
-    ("drawdown_max_count",        "Макс. кол-во просадок",                "Max drawdown count"),
-    ("pause_after_losses",        "Пауза после N минусов",                "Pause after N losses"),
-    ("max_trades_enabled",        "Автостоп по сделкам (True/False)",     "Auto-stop by trades (True/False)"),
-    ("max_trades_count",          "Лимит сделок до автостопа",            "Trade limit for auto-stop"),
-    ("adaptive_expiration_enabled","Адаптивная экспирация (True/False)",   "Adaptive expiration (True/False)"),
-    ("adaptive_expiration_mode",  "Режим адаптации (atr)",                "Adaptive mode (atr)"),
-    ("expiration_min",            "Мин. экспирация (сек)",                "Min expiration (sec)"),
-    ("expiration_max",            "Макс. экспирация (сек)",               "Max expiration (sec)"),
-
-    # ==================== Новости ====================
-    ("news_enabled",              "Пауза при новостях (True/False)",      "News pause enabled (True/False)"),
-    ("news_importance_min",       "Мин. важность (2=Medium,3=High)",      "Min importance (2=Med, 3=High)"),
-
-    # ==================== Фильтр pair_stats ====================
-    ("pair_stats_enabled",        "Фильтр по pair_stats (True/False)",    "Filter by pair_stats (True/False)"),
-    ("pair_stats_min_winrate",    "Мин. Winrate пары (%)",                "Min pair Winrate (%)"),
-    ("history_window_hours",      "Окно истории (часов)",                 "History window (hours)"),
-    ("adx_filter_enabled",        "ADX фильтр (True/False)",              "ADX filter enabled (True/False)"),
-    ("adx_min",                   "ADX мин. порог",                       "ADX min threshold"),
-    ("vwap_filter_enabled",       "VWAP фильтр (True/False)",             "VWAP filter enabled (True/False)"),
-    ("squeeze_filter_enabled",    "Squeeze фильтр (True/False)",          "Squeeze filter enabled (True/False)"),
-    ("hysteresis_enabled",        "Гистерезис (True/False)",              "Hysteresis (True/False)"),
-    ("averaging_enabled",         "Усреднение (True/False)",              "Averaging enabled (True/False)"),
-    ("averaging_step_sec",        "Усреднение: шаг (сек)",                "Averaging: step (sec)"),
-    ("averaging_max_steps",       "Усреднение: макс. ступеней",           "Averaging: max steps"),
-    ("averaging_threshold_pct",   "Усреднение: порог догона (%)",         "Averaging: threshold (%)"),
-    ("wait_candle_start_enabled", "Ждать начала свечи (True/False)",      "Wait candle start (True/False)"),
-
-    ("analysis_steps",            "Ступени с анализом (1,3,6)",              "Analysis steps (1,3,6)"),]
+    ("adaptive_expiration_enabled",     "Адаптивная экспирация (True/False)",          "Adaptive expiration (True/False)"),
+    ("adaptive_expiration_mode",        "Режим адаптации (atr)",                       "Adaptive mode (atr)"),
+    ("adx_filter_enabled",              "ADX фильтр (True/False)",                     "ADX filter enabled (True/False)"),
+    ("adx_min",                         "ADX мин. порог",                              "ADX min threshold"),
+    ("analysis_steps",                  "Ступени с анализом (1,3,6)",                  "Analysis steps (1,3,6)"),
+    ("atr_min_percent",                 "ATR мин. волатильность (%)",                  "ATR min volatility (%)"),
+    ("atr_period",                      "ATR период",                                  "ATR period"),
+    ("averaging_enabled",               "Усреднение (True/False)",                     "Averaging enabled (True/False)"),
+    ("averaging_max_steps",             "Усреднение: макс. ступеней",                  "Averaging: max steps"),
+    ("averaging_step_sec",              "Усреднение: шаг (сек)",                       "Averaging: step (sec)"),
+    ("averaging_threshold_pct",         "Усреднение: порог догона (%)",                "Averaging: threshold (%)"),
+    ("cci_filter_enabled",              "CCI фильтр (True/False)",                     "CCI filter enabled (True/False)"),
+    ("cci_overbought",                  "CCI перекуп (>X)",                            "CCI overbought (>X)"),
+    ("cci_oversold",                    "CCI перепрод (<X)",                           "CCI oversold (<X)"),
+    ("cci_period",                      "CCI период",                                  "CCI period"),
+    ("drawdown_max_count",              "Макс. кол-во просадок",                       "Max drawdown count"),
+    ("expiration",                      "Экспирация сделки (сек)",                     "Trade expiration (sec)"),
+    ("expiration_max",                  "Макс. экспирация (сек)",                      "Max expiration (sec)"),
+    ("expiration_min",                  "Мин. экспирация (сек)",                       "Min expiration (sec)"),
+    ("fixed_steps",                     "Фиксированные ставки (USD)",                  "Fixed bets (USD)"),
+    ("history_window_hours",            "Окно истории (часов)",                        "History window (hours)"),
+    ("hysteresis_enabled",              "Гистерезис (True/False)",                     "Hysteresis (True/False)"),
+    ("include_real",                    "Включать Real-пары (True/False)",             "Include Real pairs (True/False)"),
+    ("manual_signal_pause_sec",         "Пауза после сигнала (сек)",                   "Pause after signal (sec)"),
+    ("martingale_steps_count",          "Ступеней в серии (1-4)",                      "Steps in series (1-4)"),
+    ("max_drawdown_percent",            "Макс. просадка (%)",                          "Max drawdown (%)"),
+    ("max_trades_count",                "Лимит сделок до автостопа",                   "Trade limit for auto-stop"),
+    ("max_trades_enabled",              "Автостоп по сделкам (True/False)",            "Auto-stop by trades (True/False)"),
+    ("min_confirmations",               "Мин. подтверждений сигнала",                  "Min signal confirmations"),
+    ("news_enabled",                    "Пауза при новостях (True/False)",             "News pause enabled (True/False)"),
+    ("news_importance_min",             "Мин. важность (2=Medium,3=High)",             "Min importance (2=Med, 3=High)"),
+    ("pair_stats_enabled",              "Фильтр по pair_stats (True/False)",           "Filter by pair_stats (True/False)"),
+    ("pair_stats_min_winrate",          "Мин. Winrate пары (%)",                       "Min pair Winrate (%)"),
+    ("pause_after_losses",              "Пауза после N минусов",                       "Pause after N losses"),
+    ("payout_max_otc",                  "Макс. payout OTC (%)",                        "Max OTC payout (%)"),
+    ("payout_min_otc",                  "Мин. payout OTC (%)",                         "Min OTC payout (%)"),
+    ("payout_recheck_sec",              "Перепроверка payout (сек)",                   "Payout recheck (sec)"),
+    ("pure_martingale",                 "Догон 2-й по сигналу (True/False)",           "Chase 2nd by signal (True/False)"),
+    ("rsi_bear_max",                    "RSI медвежий порог (<X — PUT)",               "RSI bearish max (<X — PUT)"),
+    ("rsi_bull_min",                    "RSI бычий порог (>X — CALL)",                 "RSI bullish min (>X — CALL)"),
+    ("rsi_overbought",                  "RSI перекуп (>X — пропуск)",                  "RSI overbought (>X — skip)"),
+    ("rsi_oversold",                    "RSI перепрод (<X — пропуск)",                 "RSI oversold (<X — skip)"),
+    ("skip_before_change_minus",        "Пропусков после -серии",                      "Skips after losing series"),
+    ("skip_before_change_plus",         "Пропусков после +серии",                      "Skips after winning series"),
+    ("squeeze_filter_enabled",          "Squeeze фильтр (True/False)",                 "Squeeze filter enabled (True/False)"),
+    ("sr_cci_left",                     "SR_CCI: пивот слева (L)",                     "SR_CCI: left bars"),
+    ("sr_cci_no_signal_pause_sec",      "SR_CCI: пауза при пропуске (сек)",            "SR_CCI: no-signal pause (sec)"),
+    ("sr_cci_right",                    "SR_CCI: пивот справа (R)",                    "SR_CCI: right bars"),
+    ("sr_cci_trend_filter_enabled",     "SR_CCI: тренд-фильтр 5м (True/False)",        "SR_CCI: trend filter 5m (True/False)"),
+    ("sr_cci_trend_tf",                 "SR_CCI: ТФ тренд-фильтра (300=5м)",           "SR_CCI: trend filter TF (300=5m)"),
+    ("sr_lookback",                     "S/R lookback (свечей)",                       "S/R lookback (candles)"),
+    ("sr_proximity_percent",            "S/R близость к уровню (%)",                   "S/R proximity to level (%)"),
+    ("strategy_mode",                   "Режим (Classic / SR_CCI)",                    "Strategy mode (Classic / SR_CCI)"),
+    ("vwap_filter_enabled",             "VWAP фильтр (True/False)",                    "VWAP filter enabled (True/False)"),
+    ("wait_candle_start_enabled",       "Ждать начала свечи (True/False)",             "Wait candle start (True/False)"),
+]
 
 def _format_value(val) -> str:
     """Форматирует значение для отображения."""
