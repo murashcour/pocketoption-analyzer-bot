@@ -119,12 +119,44 @@ async def full_analysis_sr_cci(client, pair: str, cfg: dict, fetch_candles, get_
                 touched_resistance = True
                 res_zone = z
 
-    if touched_support and cci_val < cfg.get("cci_oversold", -100):
-        signal = "CALL"
-        logger.info(f"   [SR_CCI] Касание поддержки (за {lookback} св.) + CCI {cci_val:.1f} -> CALL")
-    elif touched_resistance and cci_val > cfg.get("cci_overbought", 100):
-        signal = "PUT"
-        logger.info(f"   [SR_CCI] Касание сопротивления (за {lookback} св.) + CCI {cci_val:.1f} -> PUT")
+    # PATCH_058: фильтр по тренду 5м (EMA20 vs EMA50)
+    if cfg.get("sr_cci_trend_filter_enabled", False):
+        try:
+            _tf = cfg.get("sr_cci_trend_tf", 300)
+            _c5 = await fetch_candles(client, pair, _tf, 100)
+            if _c5 and len(_c5) >= 50:
+                _closes5 = [get_close(c) for c in _c5]
+                _e20 = sum(_closes5[-20:]) / 20
+                _e50 = sum(_closes5[-50:]) / 50
+                # EMA грубо через SMA (для 5м достаточно)
+                _trend_up = _e20 > _e50
+                if touched_support and cci_val < cfg.get("cci_oversold", -100):
+                    if _trend_up:
+                        signal = "CALL"
+                        logger.info(f"   [SR_CCI] Поддержка + CCI {cci_val:.1f} + тренд 5м UP -> CALL")
+                    else:
+                        logger.info(f"   [SR_CCI] Поддержка + CCI {cci_val:.1f}, но тренд 5м DOWN — пропуск CALL")
+                elif touched_resistance and cci_val > cfg.get("cci_overbought", 100):
+                    if not _trend_up:
+                        signal = "PUT"
+                        logger.info(f"   [SR_CCI] Сопротивление + CCI {cci_val:.1f} + тренд 5м DOWN -> PUT")
+                    else:
+                        logger.info(f"   [SR_CCI] Сопротивление + CCI {cci_val:.1f}, но тренд 5м UP — пропуск PUT")
+        except Exception as e:
+            logger.debug(f"PATCH_058: ошибка тренд-фильтра: {e}")
+            # При ошибке — старое поведение
+            if touched_support and cci_val < cfg.get("cci_oversold", -100):
+                signal = "CALL"
+            elif touched_resistance and cci_val > cfg.get("cci_overbought", 100):
+                signal = "PUT"
+    else:
+        # Старое поведение (без фильтра)
+        if touched_support and cci_val < cfg.get("cci_oversold", -100):
+            signal = "CALL"
+            logger.info(f"   [SR_CCI] Касание поддержки (за {lookback} св.) + CCI {cci_val:.1f} -> CALL")
+        elif touched_resistance and cci_val > cfg.get("cci_overbought", 100):
+            signal = "PUT"
+            logger.info(f"   [SR_CCI] Касание сопротивления (за {lookback} св.) + CCI {cci_val:.1f} -> PUT")
 
     if signal:
         return signal, price, "OK"
