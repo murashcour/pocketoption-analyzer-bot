@@ -956,12 +956,13 @@ def get_martingale_steps(balance: float, double_mode: bool = False) -> List[floa
                 break
     # === FALLBACK ===
     if not base_steps:
-        if CFG.get("use_fixed_for_long_martingale", True) and count >= 7:
+        # PATCH_063.3: фиксированные ступени при ЛЮБОМ count (не только >= 7)
+        if CFG.get("use_fixed_for_long_martingale", True):
             base_steps = list(CFG["fixed_steps"])[:count]
             if len(base_steps) < count:
                 last = base_steps[-1] if base_steps else 1.0
                 base_steps += [last] * (count - len(base_steps))
-            logger.info(f"   💰 PATCH_024: {count} ступеней -> fixed_steps: {base_steps}")
+            logger.info(f"   💰 PATCH_063.3: {count} ступеней -> fixed_steps: {base_steps}")
         elif balance < CFG["min_balance_for_percent"]:
             base_steps = list(CFG["fixed_steps"])[:count]
         else:
@@ -1329,6 +1330,7 @@ async def _ensure_good_payout(client, pair: str, step_name: str, state, stopper)
             # SERVER_FIX: проверяем, реально ли сменилась пара
             if pair == _old_pair:
                 logger.warning(f"   ⚠ {step_name}: пара не сменилась ({pair}) — отмена серии")
+                await stopper.sleep(60)
                 return pair, False, False
             changed = True
 
@@ -2337,10 +2339,13 @@ class TraderState:
             self.pair_stats[pair]["losses"] += 1
             self.hour_stats[hour]["losses"] += 1
 
-    def record_trade(self, is_win: bool, attempt: int = 1):
-        """PATCH_044: победа по попытке (1-7) с защитой от KeyError."""
+    def record_trade(self, is_win, attempt: int = 1, is_tie: bool = False):
+        """PATCH_063.2: поддержка ничьей (is_tie)."""
         self.total_trades += 1
-        if is_win:
+        if is_tie:
+            # Ничья — не засчитываем ни в win, ни в loss
+            pass
+        elif is_win:
             self.win_trades += 1
             if 1 <= attempt <= 7:
                 self.wins_by_attempt[attempt] = self.wins_by_attempt.get(attempt, 0) + 1
