@@ -3426,6 +3426,12 @@ class Trader:
                             f"⚠️ [{pair}] Payout {live_payout:.1f}% вне "
                             f"[{pmin}, {pmax}]%"
                         )
+                        # PATCH_064: пауза, если мало пар
+                        if len(self.state.pairs) <= 2:
+                            logger.warning(f"⚠️ Мало пар ({len(self.state.pairs)}). Ждём 60 сек...")
+                            self.state.current_payout = None
+                            await self.stopper.sleep(60)
+                            continue
                         self.state.change_pair("payout вне диапазона")
                         continue
                     self.state.current_payout = live_payout
