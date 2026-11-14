@@ -64,6 +64,16 @@ class ManualManager:
                 if bal: self.start_balance = self.current_balance = bal; break
                 await asyncio.sleep(2)
             
+            # PATCH_065: игнорируем все существующие сделки (от прошлых прогонов)
+            try:
+                _existing = await client.closed_deals()
+                for _d in _existing:
+                    if _d.get("id"):
+                        self.seen_ids.add(_d.get("id"))
+                print(f"📚 Проигнорировано старых сделок: {len(self.seen_ids)}")
+            except Exception as _e:
+                print(f"⚠ Не удалось загрузить старые сделки: {_e}")
+            
             self.print_table()
             print(f"💰 Баланс: ${self.start_balance:.2f}")
             print(f"🎯 Цель: +{TARGET_PCT}% (${self.start_balance * TARGET_PCT / 100:.2f})")
