@@ -24,6 +24,7 @@ class ManualManager:
         self.seen_ids = set()
         self.stopped = False
         self.steps = []
+        self.start_ts = 0.0
         
         cumulative_loss = 0.0
         for i in range(MAX_STEPS):
@@ -32,7 +33,8 @@ class ManualManager:
                 "step": i + 1,
                 "bet": bet,
                 "loss": -cumulative_loss if i > 0 else 0,
-                "profit": round((bet / PAYOUT) - bet, 2)
+                # PATCH_066: правильный профит = bet * PAYOUT - cumulative_loss
+                "profit": round(bet * PAYOUT - cumulative_loss, 2)
             })
             cumulative_loss += bet
 
@@ -48,7 +50,7 @@ class ManualManager:
         print("-" * 55)
         cum = 0
         for s in self.steps:
-            print(f"{s['step']:<5} | ${s['bet']:<9.2f} | ${cum:<9.2f} | +${(s['bet']/PAYOUT - s['bet']):<14.2f}")
+            print(f"{s['step']:<5} | ${s['bet']:<9.2f} | ${cum:<9.2f} | +${s['profit']:<14.2f}")
             cum += s['bet']
         print("="*55 + "\n")
 
@@ -64,6 +66,8 @@ class ManualManager:
                 if bal: self.start_balance = self.current_balance = bal; break
                 await asyncio.sleep(2)
             
+            # PATCH_069: фиксируем время старта для фильтра openTimestamp
+            self.start_ts = time.time()
             # PATCH_065: игнорируем все существующие сделки (от прошлых прогонов)
             try:
                 _existing = await client.closed_deals()
@@ -92,6 +96,13 @@ class ManualManager:
                     new_deals.sort(key=lambda x: x.get("closeTimestamp", 0))
 
                     for d in new_deals:
+                        # PATCH_069: фильтр по openTimestamp (приведение к float)
+                        try:
+                            open_ts = float(d.get("openTimestamp", 0))
+                        except (ValueError, TypeError):
+                            open_ts = 0.0
+                        if open_ts < self.start_ts:
+                            continue
                         asset = d.get("asset", "")
                         profit_str = str(d.get("profit", "0")).replace("+", "").replace(",", ".")
                         try: profit = float(profit_str)
@@ -117,13 +128,13 @@ class ManualManager:
                                 print(f"\n💀 LOSS {asset}: -${abs(profit):.2f}. СЕРИЯ ПРОИГРАНА.")
                                 print(f"🎯 Новая серия. Ставка: ${self.get_bet():.2f} (Шаг 1/{MAX_STEPS})")
 
-                    if time.time() - last_check > 10:
+                    # PATCH_067: проверяем лимиты только после закрытия сделки, без спама
+                    if len(new_deals) > 0:
                         bal = await self.get_balance(client)
                         if bal:
                             self.current_balance = bal
                             pnl = self.current_balance - self.start_balance
                             pnl_pct = (pnl / self.start_balance) * 100 if self.start_balance > 0 else 0
-                            print(f"💰 Баланс: ${self.current_balance:.2f} | PnL: {pnl:+.2f} ({pnl_pct:+.1f}%)")
                             
                             if pnl_pct >= TARGET_PCT:
                                 print(f"\n🎯 ЦЕЛЬ ДОСТИГНУТА! PnL: {pnl_pct:+.2f}%. СТОП.")
@@ -131,7 +142,6 @@ class ManualManager:
                             if pnl_pct <= -STOP_LOSS_PCT:
                                 print(f"\n🛑 СТОП-ЛОСС! PnL: {pnl_pct:+.2f}%. ОСТАНОВИСЬ.")
                                 self.stopped = True; break
-                        last_check = time.time()
 
                     await asyncio.sleep(3)
                 except Exception as e:
