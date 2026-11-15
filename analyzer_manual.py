@@ -126,39 +126,42 @@ def pick_final(classic_sig, sr_sig):
     return None, "NONE"
 
 
-async def combined_analysis(client, pair, cfg):
-    """Возвращает (classic_sig, sr_sig, price, c_reason, s_reason)."""
+async def combined_analysis(ssid, pair, cfg):
+    """PATCH_074: два отдельных PocketOptionAsync.
+    Live-генератор Classic закрывает websocket — SR_CCI в новой сессии."""
     classic_sig = None
-    classic_reason = ""
+    classic_reason = "SKIP"
     price = None
     try:
-        r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=60)
-        if isinstance(r, tuple) and len(r) >= 3:
-            classic_sig, price, classic_reason = r[0], r[1], r[2]
-        elif isinstance(r, tuple) and len(r) == 2:
-            classic_sig, price = r[0], r[1]
-            classic_reason = "OK" if classic_sig else "NO_SIGNAL"
+        async with PocketOptionAsync(ssid=ssid) as client:
+            r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=60)
+            if isinstance(r, tuple) and len(r) >= 3:
+                classic_sig, price, classic_reason = r[0], r[1], r[2]
+            elif isinstance(r, tuple) and len(r) == 2:
+                classic_sig, price = r[0], r[1]
+                classic_reason = "OK" if classic_sig else "NO_SIGNAL"
     except asyncio.TimeoutError:
         classic_reason = "TIMEOUT"
     except Exception as e:
         classic_reason = f"ERR:{type(e).__name__}"
 
     sr_sig = None
-    sr_reason = ""
+    sr_reason = "SKIP"
     try:
-        r = await asyncio.wait_for(
-            full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
-            timeout=60
-        )
-        if isinstance(r, tuple) and len(r) >= 3:
-            sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
-            if price is None:
-                price = sr_price
-        elif isinstance(r, tuple) and len(r) == 2:
-            sr_sig, sr_price = r[0], r[1]
-            if price is None:
-                price = sr_price
-            sr_reason = "OK" if sr_sig else "NO_SIGNAL"
+        async with PocketOptionAsync(ssid=ssid) as client:
+            r = await asyncio.wait_for(
+                full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
+                timeout=60
+            )
+            if isinstance(r, tuple) and len(r) >= 3:
+                sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
+                if price is None:
+                    price = sr_price
+            elif isinstance(r, tuple) and len(r) == 2:
+                sr_sig, sr_price = r[0], r[1]
+                if price is None:
+                    price = sr_price
+                sr_reason = "OK" if sr_sig else "NO_SIGNAL"
     except asyncio.TimeoutError:
         sr_reason = "TIMEOUT"
     except Exception as e:
@@ -185,7 +188,7 @@ def _line(content: str, W: int = 50) -> str:
     return f"\u2551 {content}{' ' * pad} \u2551"
 
 
-def print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats):
+def print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats, c_reason="", s_reason=""):
     W = 50
     BLUE = "\033[94m"
     RED = "\033[91m"
@@ -209,7 +212,13 @@ def print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats):
     if price is not None:
         lines.append(_line(f"\u0426\u0435\u043d\u0430:        {price:.5f}", W))
     lines.append(_line(f"Classic:     {_sig(classic_sig)}", W))
+    if classic_sig is None and c_reason and c_reason != "OK":
+        _cr = str(c_reason)[:W - 16]
+        lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {_cr}", W))
     lines.append(_line(f"SR_CCI:      {_sig(sr_sig)}", W))
+    if sr_sig is None and s_reason and s_reason != "OK":
+        _sr = str(s_reason)[:W - 16]
+        lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {_sr}", W))
     lines.append(sep)
 
     if status == "STRONG" and final_sig == "CALL":
@@ -277,12 +286,11 @@ async def main():
 
     print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}: Classic + SR_CCI...")
 
-    async with PocketOptionAsync(ssid=ssid) as client:
-        classic_sig, sr_sig, price, c_reason, s_reason = await combined_analysis(client, pair, cfg)
+    classic_sig, sr_sig, price, c_reason, s_reason = await combined_analysis(ssid, pair, cfg)
 
     final_sig, status = pick_final(classic_sig, sr_sig)
     stats = load_pair_stats(pair)
-    print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats)
+    print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats, c_reason, s_reason)
 
 
 if __name__ == "__main__":
