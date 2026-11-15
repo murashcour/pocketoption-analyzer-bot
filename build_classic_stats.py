@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-build_classic_stats.py (PATCH_076):
-Бэктест Classic-стратегии по history/*.csv и history_real/*.csv.
-Пишет pair_stats_classic.json в формате: {"PAIR": {winrate, wins, losses, total, skipped}}.
+build_classic_stats.py (PATCH_076b):
+Бэктест Classic по history/*.csv и history_real/*.csv.
+Окно: history_window_minutes из config (дефолт 1440 = 24ч).
+Логи analyzer_bot отключены для скорости.
 """
 import csv
 import json
@@ -11,9 +12,6 @@ import logging
 import sys
 import time
 from pathlib import Path
-
-# PATCH_076: analyze_1m пишет INFO-лог на каждый сигнал — глушим для скорости
-logging.disable(logging.INFO)
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
@@ -26,6 +24,10 @@ from analyzer_bot import (
     find_support_resistance, check_sr_proximity,
     get_close, load_config,
 )
+
+# PATCH_076b: жёстко отключаем логгер analyzer_bot (analyze_1m пишет на каждый сигнал)
+analyzer_bot.logger.disabled = True
+logging.getLogger().disabled = True
 
 
 def load_candles(csv_path):
@@ -80,20 +82,23 @@ def backtest_classic(candles, window_size=100):
 
 
 def main():
-    print("build_classic_stats.py - start")
+    print("build_classic_stats.py - start (PATCH_076b)")
     if not CONFIG_FILE.exists():
         print(f"ERR config.json not found: {CONFIG_FILE}")
         sys.exit(1)
 
     cfg = load_config()
     analyzer_bot.CFG = cfg
+    window_min = int(cfg.get("history_window_minutes", 1440))
     print(f"   CFG: strategy={cfg.get('strategy_mode')}, "
           f"min_conf={cfg.get('min_confirmations')}, "
           f"rsi=[{cfg.get('rsi_oversold')},{cfg.get('rsi_overbought')}]")
+    print(f"   window: {window_min} candles (~{window_min // 60}h)")
 
     stats = {}
     total_signals = 0
     t_start = time.time()
+    done = 0
 
     for hdir in HISTORY_DIRS:
         if not hdir.exists():
@@ -103,12 +108,20 @@ def main():
         print(f"\nDIR {hdir.name}: {len(csv_files)} files")
         for csv_path in csv_files:
             pair = csv_path.stem
+            t_pair = time.time()
             candles = load_candles(csv_path)
+            # PATCH_076b: окно 24ч
+            if len(candles) > window_min:
+                candles = candles[-window_min:]
             if len(candles) < 100:
+                print(f"   {pair}: skip (too few candles: {len(candles)})")
                 continue
             wins, losses, skipped = backtest_classic(candles)
             total = wins + losses
+            done += 1
+            dt = time.time() - t_pair
             if total < 10:
+                print(f"   {pair}: skip (signals={total}) [{dt:.1f}s]")
                 continue
             wr = (wins / total) * 100
             stats[pair] = {
@@ -119,7 +132,7 @@ def main():
                 "skipped": skipped,
             }
             total_signals += total
-            print(f"   {pair}: {wr:.1f}% ({wins}/{total}) [skip={skipped}]")
+            print(f"   {pair}: {wr:.1f}% ({wins}/{total}) skip={skipped} [{dt:.1f}s]")
 
     elapsed = time.time() - t_start
     if not stats:
@@ -129,8 +142,9 @@ def main():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
 
-    print(f"\nOK saved {len(stats)} pairs to {STATS_FILE.name} in {elapsed:.1f}s")
+    print(f"\nOK saved {len(stats)} pairs to {STATS_FILE.name}")
     print(f"   total signals: {total_signals}")
+    print(f"   elapsed: {elapsed:.1f}s ({done} pairs processed)")
 
 
 if __name__ == "__main__":
