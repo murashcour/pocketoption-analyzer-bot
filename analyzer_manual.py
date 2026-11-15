@@ -46,43 +46,6 @@ def load_cfg() -> dict:
     return json.loads(Path(CONFIG_FILE).read_text(encoding="utf-8"))
 
 
-async def fetch_candles_safe(client, asset: str, period: int, count: int):
-    """PATCH_077b: большие ТФ — get_candles_live, маленькие — get_candles."""
-    if period >= 900:
-        return []
-    if period >= 300:
-        result = []
-        try:
-            async for closed, forming in client.get_candles_live(asset, period, count):
-                if isinstance(closed, list):
-                    result.extend(closed)
-                if isinstance(forming, dict):
-                    result.append(forming)
-                if len(result) >= count:
-                    break
-            return result[:count]
-        except Exception:
-            return result[:count]
-    try:
-        candles = await asyncio.wait_for(
-            client.get_candles(asset, period, count), timeout=20
-        )
-        return candles or []
-    except Exception:
-        return []
-
-
-async def get_current_price_safe(client, pair: str):
-    """PATCH_077b: цена из закрытой свечи 1м."""
-    try:
-        candles = await asyncio.wait_for(client.get_candles(pair, 60, 2), timeout=10)
-        if candles:
-            return get_close(candles[-1])
-    except Exception:
-        pass
-    return None
-
-
 def load_pair_stats(pair: str) -> dict:
     """PATCH_077: читает оба JSON — Classic и SR_CCI.
     Возвращает {"classic": {...} | None, "sr_cci": {...} | None}."""
@@ -253,7 +216,7 @@ async def combined_analysis(ssid, pair, cfg):
     try:
         async with PocketOptionAsync(ssid=ssid) as client:
             r = await asyncio.wait_for(
-                full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
+                full_analysis_sr_cci(client, pair, cfg, analyzer_bot.fetch_candles, analyzer_bot.get_current_price),
                 timeout=30
             )
             if isinstance(r, tuple) and len(r) >= 3:
@@ -289,6 +252,16 @@ async def main():
     if not ssid:
         print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
         sys.exit(1)
+
+    # PATCH_081: проверка, что бот не работает (иначе get_candles_live виснет)
+    import subprocess
+    _pg = subprocess.run(["pgrep", "-f", "analyzer_bot.py"], capture_output=True, text=True)
+    if _pg.stdout.strip():
+        pids = ", ".join(_pg.stdout.strip().split())
+        print(f"\u26a0 \u0411\u043e\u0442 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 (PID: {pids}).")
+        print("   \u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u0435 \u0431\u043e\u0442\u0430 \u043f\u0435\u0440\u0435\u0434 \u0437\u0430\u043f\u0443\u0441\u043a\u043e\u043c \u0430\u043d\u0430\u043b\u0438\u0437\u0430\u0442\u043e\u0440\u0430.")
+        print("   touch stop.flag  # \u0438\u043b\u0438  pkill -f analyzer_bot.py")
+        sys.exit(2)
 
     cfg = load_cfg()
 
