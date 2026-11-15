@@ -275,12 +275,10 @@ async def main():
             pass
         os._exit(3)
 
-    # PATCH_077: Classic primary (SR_CCI справочно, не блокирует)
+    # PATCH_081b: monkey-patch только CFG. Родные fetch_candles/get_current_price — не трогаем.
     classic_cfg = dict(cfg)
     classic_cfg["strategy_mode"] = "Classic"
     analyzer_bot.CFG = classic_cfg
-    analyzer_bot.fetch_candles = fetch_candles_safe
-    analyzer_bot.get_current_price = get_current_price_safe
 
     print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}...")
 
