@@ -54,8 +54,14 @@ def load_pair_stats(pair: str):
     except Exception:
         return None
     if isinstance(data, dict):
-        # пробуем разные варианты ключей
-        return data.get(pair) or data.get(pair.lower()) or data.get(pair.upper())
+        stats = data.get(pair) or data.get(pair.lower()) or data.get(pair.upper())
+        # PATCH_072b: total = wins + losses, если не задан явно
+        if isinstance(stats, dict) and "total" not in stats:
+            w = stats.get("wins", 0) or 0
+            l = stats.get("losses", 0) or 0
+            if w or l:
+                stats["total"] = int(w) + int(l)
+        return stats
     return None
 
 
@@ -138,7 +144,12 @@ async def main():
         print("Использование: python analyzer_manual.py EURUSD_otc")
         sys.exit(1)
 
-    pair = sys.argv[1].strip().upper()
+    raw = sys.argv[1].strip()
+    if "_" in raw:
+        base, suffix = raw.rsplit("_", 1)
+        pair = base.upper() + "_" + suffix.lower()
+    else:
+        pair = raw.upper() + "_otc"
     ssid = load_ssid()
     if not ssid:
         print("❌ SSID не найден (~/.po_ssid или PO_SSID)")
