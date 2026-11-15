@@ -46,6 +46,43 @@ def load_cfg() -> dict:
     return json.loads(Path(CONFIG_FILE).read_text(encoding="utf-8"))
 
 
+async def fetch_candles_safe(client, asset: str, period: int, count: int):
+    """PATCH_077b: большие ТФ — get_candles_live, маленькие — get_candles."""
+    if period >= 900:
+        return []
+    if period >= 300:
+        result = []
+        try:
+            async for closed, forming in client.get_candles_live(asset, period, count):
+                if isinstance(closed, list):
+                    result.extend(closed)
+                if isinstance(forming, dict):
+                    result.append(forming)
+                if len(result) >= count:
+                    break
+            return result[:count]
+        except Exception:
+            return result[:count]
+    try:
+        candles = await asyncio.wait_for(
+            client.get_candles(asset, period, count), timeout=20
+        )
+        return candles or []
+    except Exception:
+        return []
+
+
+async def get_current_price_safe(client, pair: str):
+    """PATCH_077b: цена из закрытой свечи 1м."""
+    try:
+        candles = await asyncio.wait_for(client.get_candles(pair, 60, 2), timeout=10)
+        if candles:
+            return get_close(candles[-1])
+    except Exception:
+        pass
+    return None
+
+
 def load_pair_stats(pair: str) -> dict:
     """PATCH_077: читает оба JSON — Classic и SR_CCI.
     Возвращает {"classic": {...} | None, "sr_cci": {...} | None}."""
