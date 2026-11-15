@@ -215,6 +215,20 @@ def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""
     print("\n".join(lines))
 
 
+async def check_active_pair(ssid: str, pair: str) -> bool:
+    """PATCH_079: быстрая проверка — есть ли пара в active_assets.
+    True — активна, False — нет (мёртвая / недоступна)."""
+    try:
+        async with PocketOptionAsync(ssid=ssid) as client:
+            assets = await asyncio.wait_for(client.active_assets(), timeout=10)
+        symbols = {a.get("symbol") for a in assets if a.get("is_active")}
+        return pair in symbols
+    except Exception as e:
+        # Не блокируем — если проверка упала, пробуем анализ (лучше так, чем отказ)
+        print(f"\u26a0 \u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 active_assets: {type(e).__name__}: {e}")
+        return True
+
+
 async def combined_analysis(ssid, pair, cfg):
     """PATCH_077c: Classic primary (60s), SR_CCI справочно (30s).
     Два отдельных PocketOptionAsync — live-генератор Classic закрывает websocket."""
@@ -278,6 +292,16 @@ async def main():
 
     cfg = load_cfg()
 
+    # PATCH_079: быстрая проверка active_assets (2-3 сек)
+    print(f"\u23f3 \u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0441\u0442\u044c {pair}...")
+    if not await check_active_pair(ssid, pair):
+        print(f"\u26a0 {pair} \u043d\u0435\u0442 \u0432 active_assets \u2014 \u043f\u0430\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0441\u0435\u0439\u0447\u0430\u0441")
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        os._exit(3)
+
     # PATCH_077: Classic primary (SR_CCI справочно, не блокирует)
     classic_cfg = dict(cfg)
     classic_cfg["strategy_mode"] = "Classic"
@@ -287,7 +311,18 @@ async def main():
 
     print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}...")
 
-    classic_sig, sr_sig, price, c_reason, s_reason = await combined_analysis(ssid, pair, cfg)
+    # PATCH_079: общий таймаут 45с (защита от зависания)
+    try:
+        classic_sig, sr_sig, price, c_reason, s_reason = await asyncio.wait_for(
+            combined_analysis(ssid, pair, cfg), timeout=45
+        )
+    except asyncio.TimeoutError:
+        print(f"\u26a0 \u041e\u0431\u0449\u0438\u0439 \u0442\u0430\u0439\u043c\u0430\u0443\u0442 \u0430\u043d\u0430\u043b\u0438\u0437\u0430 {pair} (>45\u0441)")
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        os._exit(4)
 
     stats = load_pair_stats(pair)
     print_card(pair, classic_sig, sr_sig, price, stats, c_reason, s_reason)
