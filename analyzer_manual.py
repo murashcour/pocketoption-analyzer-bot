@@ -65,13 +65,20 @@ def load_pair_stats(pair: str):
 
 
 async def fetch_candles_safe(client, asset: str, period: int, count: int):
-    """PATCH_072c: get_candles без live (live висит при параллельном боте)."""
+    """PATCH_072d: get_candles, cap для больших ТФ, retry при таймауте."""
+    if period >= 300:
+        count = min(count, 60)  # 100 свечей на 5м висит; 60 хватает для EMA50
     try:
         candles = await asyncio.wait_for(client.get_candles(asset, period, count), timeout=20)
         return candles or []
     except asyncio.TimeoutError:
-        print(f"⚠ fetch_candles_safe({asset}, {period}): таймаут 20с")
-        return []
+        await asyncio.sleep(2)
+        try:
+            candles = await asyncio.wait_for(client.get_candles(asset, period, count), timeout=15)
+            return candles or []
+        except asyncio.TimeoutError:
+            print(f"⚠ fetch_candles_safe({asset}, {period}): таймаут после retry")
+            return []
     except Exception as e:
         print(f"⚠ fetch_candles_safe({asset}, {period}): {type(e).__name__}: {e}")
         return []
