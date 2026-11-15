@@ -18,9 +18,8 @@ from pathlib import Path
 
 from BinaryOptionsToolsV2 import PocketOptionAsync
 
-# Та же логика, что у бота — ноль расхождений
-from analyzer_bot import fetch_candles, get_current_price
-from strategy_sr_cci import full_analysis_sr_cci
+# PATCH_072c: своя загрузка через get_candles (live висит при параллельном боте)
+from strategy_sr_cci import full_analysis_sr_cci, get_close
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s | %(message)s")
 
@@ -62,6 +61,30 @@ def load_pair_stats(pair: str):
             if w or l:
                 stats["total"] = int(w) + int(l)
         return stats
+    return None
+
+
+async def fetch_candles_safe(client, asset: str, period: int, count: int):
+    """PATCH_072c: get_candles без live (live висит при параллельном боте)."""
+    try:
+        candles = await asyncio.wait_for(client.get_candles(asset, period, count), timeout=20)
+        return candles or []
+    except asyncio.TimeoutError:
+        print(f"⚠ fetch_candles_safe({asset}, {period}): таймаут 20с")
+        return []
+    except Exception as e:
+        print(f"⚠ fetch_candles_safe({asset}, {period}): {type(e).__name__}: {e}")
+        return []
+
+
+async def get_current_price_safe(client, pair: str):
+    """PATCH_072c: цена из закрытой свечи 1м (get_candles)."""
+    try:
+        candles = await asyncio.wait_for(client.get_candles(pair, 60, 2), timeout=10)
+        if candles:
+            return get_close(candles[-1])
+    except Exception:
+        pass
     return None
 
 
@@ -158,7 +181,14 @@ async def main():
     cfg = load_cfg()
 
     async with PocketOptionAsync(ssid=ssid) as client:
-        result = await full_analysis_sr_cci(client, pair, cfg, fetch_candles, get_current_price)
+        try:
+            result = await asyncio.wait_for(
+                full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
+                timeout=60,
+            )
+        except asyncio.TimeoutError:
+            print(f"⚠ Таймаут анализа {pair} (>60 сек). Попробуйте ещё раз.")
+            sys.exit(2)
 
     # full_analysis_sr_cci возвращает (signal, price, reason)
     if isinstance(result, tuple) and len(result) >= 3:
