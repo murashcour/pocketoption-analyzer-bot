@@ -14,7 +14,7 @@ import json
 import sys
 from pathlib import Path
 
-HUD_JSON = Path("hud.json")
+HUD_JSON = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("hud.json")
 
 # ANSI-цвета
 RESET = "\033[0m"
@@ -81,7 +81,7 @@ def main():
     lines.append("╔" + "═" * (W + 2) + "╗")
 
     # Заголовок
-    title = f"{BOLD}{CYAN}📊 POCKET OPTION ANALYZER{RESET}"
+    title = f"{BOLD}{CYAN}{data.get('title', '📊 POCKET OPTION ANALYZER')}{RESET}"
     if data.get("double_mode"):
         title += f" {MAGENTA}[УДВОЕНИЕ]{RESET}"
     lines.append(_line(title))
