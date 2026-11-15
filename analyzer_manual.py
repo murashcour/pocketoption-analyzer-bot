@@ -18,7 +18,9 @@ from pathlib import Path
 
 from BinaryOptionsToolsV2 import PocketOptionAsync
 
-# PATCH_072c: своя загрузка через get_candles (live висит при параллельном боте)
+# PATCH_073: Classic через full_analysis из analyzer_bot, SR_CCI через strategy_sr_cci
+import analyzer_bot
+from analyzer_bot import full_analysis as classic_full_analysis
 from strategy_sr_cci import full_analysis_sr_cci, get_close
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s | %(message)s")
@@ -65,9 +67,9 @@ def load_pair_stats(pair: str):
 
 
 async def fetch_candles_safe(client, asset: str, period: int, count: int):
-    """PATCH_072e: большие ТФ — get_candles_live, маленькие — get_candles.
-    get_candles(300) висит при параллельном боте, live(300) работает (68 свечей).
-    Обратное для 1м: get_candles(60) работает, live(60) висит."""
+    """PATCH_073: >=900 → [], иначе как 072e (300+ live, <300 get_candles)."""
+    if period >= 900:
+        return []  # 15м в Classic убран (SERVER_FIX), SR_CCI не использует
     if period >= 300:
         # 5м/15м — live (get_candles виснет)
         result = []
@@ -111,6 +113,60 @@ async def get_current_price_safe(client, pair: str):
     return None
 
 
+def pick_final(classic_sig, sr_sig):
+    """Возвращает (final_sig, status): STRONG / WEAK / CONFLICT / NONE."""
+    if classic_sig == sr_sig and classic_sig in ("CALL", "PUT"):
+        return classic_sig, "STRONG"
+    if classic_sig in ("CALL", "PUT") and sr_sig in ("CALL", "PUT"):
+        return None, "CONFLICT"
+    if classic_sig in ("CALL", "PUT"):
+        return classic_sig, "WEAK"
+    if sr_sig in ("CALL", "PUT"):
+        return sr_sig, "WEAK"
+    return None, "NONE"
+
+
+async def combined_analysis(client, pair, cfg):
+    """Возвращает (classic_sig, sr_sig, price, c_reason, s_reason)."""
+    classic_sig = None
+    classic_reason = ""
+    price = None
+    try:
+        r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=60)
+        if isinstance(r, tuple) and len(r) >= 3:
+            classic_sig, price, classic_reason = r[0], r[1], r[2]
+        elif isinstance(r, tuple) and len(r) == 2:
+            classic_sig, price = r[0], r[1]
+            classic_reason = "OK" if classic_sig else "NO_SIGNAL"
+    except asyncio.TimeoutError:
+        classic_reason = "TIMEOUT"
+    except Exception as e:
+        classic_reason = f"ERR:{type(e).__name__}"
+
+    sr_sig = None
+    sr_reason = ""
+    try:
+        r = await asyncio.wait_for(
+            full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
+            timeout=60
+        )
+        if isinstance(r, tuple) and len(r) >= 3:
+            sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
+            if price is None:
+                price = sr_price
+        elif isinstance(r, tuple) and len(r) == 2:
+            sr_sig, sr_price = r[0], r[1]
+            if price is None:
+                price = sr_price
+            sr_reason = "OK" if sr_sig else "NO_SIGNAL"
+    except asyncio.TimeoutError:
+        sr_reason = "TIMEOUT"
+    except Exception as e:
+        sr_reason = f"ERR:{type(e).__name__}"
+
+    return classic_sig, sr_sig, price, classic_reason, sr_reason
+
+
 def _dw(s: str) -> int:
     import unicodedata
     w = 0
@@ -129,58 +185,65 @@ def _line(content: str, W: int = 50) -> str:
     return f"\u2551 {content}{' ' * pad} \u2551"
 
 
-def print_card(pair, signal, price, reason, stats):
+def print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats):
     W = 50
+    BLUE = "\033[94m"
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    GRAY = "\033[90m"
+    RESET = "\033[0m"
     sep = "\u2560" + "\u2550" * (W + 2) + "\u2563"
     top = "\u2554" + "\u2550" * (W + 2) + "\u2557"
     bot = "\u255a" + "\u2550" * (W + 2) + "\u255d"
+
+    def _sig(s):
+        if s == "CALL": return "CALL"
+        if s == "PUT": return "PUT"
+        return "\u2014"
 
     lines = [
         top,
         _line(f"\U0001F3AF \u0410\u041d\u0410\u041b\u0418\u0417: {pair}", W),
         sep,
     ]
-
-    if signal == "CALL":
-        lines.append(_line("\u0421\u0438\u0433\u043d\u0430\u043b:      \u2b06 CALL (\u0412\u0412\u0415\u0420\u0425)", W))
-    elif signal == "PUT":
-        lines.append(_line("\u0421\u0438\u0433\u043d\u0430\u043b:      \u2b07 PUT (\u0412\u041d\u0418\u0417)", W))
-    else:
-        lines.append(_line("\u0421\u0438\u0433\u043d\u0430\u043b:      \u23f8 \u041d\u0435\u0442 \u0441\u0438\u0433\u043d\u0430\u043b\u0430", W))
-
     if price is not None:
         lines.append(_line(f"\u0426\u0435\u043d\u0430:        {price:.5f}", W))
+    lines.append(_line(f"Classic:     {_sig(classic_sig)}", W))
+    lines.append(_line(f"SR_CCI:      {_sig(sr_sig)}", W))
+    lines.append(sep)
 
-    if reason:
-        # обрезаем причину по ширине
-        r = str(reason)
-        if len(r) > W - 14:
-            r = r[:W - 17] + "..."
-        lines.append(_line(f"\u041f\u0440\u0438\u0447\u0438\u043d\u0430:     {r}", W))
+    if status == "STRONG" and final_sig == "CALL":
+        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {BLUE}\u2b06 CALL{RESET}", W))
+    elif status == "STRONG" and final_sig == "PUT":
+        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {RED}\u2b07 PUT{RESET}", W))
+    elif status == "CONFLICT":
+        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {YELLOW}\u2696 \u041a\u041e\u041d\u0424\u041b\u0418\u041a\u0422 \u2014 \u043f\u0440\u043e\u043f\u0443\u0441\u043a{RESET}", W))
+    elif status == "WEAK" and final_sig == "CALL":
+        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {YELLOW}\u2b06 CALL (\u0441\u043b\u0430\u0431\u044b\u0439){RESET}", W))
+    elif status == "WEAK" and final_sig == "PUT":
+        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {YELLOW}\u2b07 PUT (\u0441\u043b\u0430\u0431\u044b\u0439){RESET}", W))
+    else:
+        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {GRAY}\u23f8 \u041d\u0435\u0442 \u0441\u0438\u0433\u043d\u0430\u043b\u0430{RESET}", W))
 
     lines.append(sep)
 
     if stats:
-        # пробуем угадать поля
-        wr = stats.get("winrate") or stats.get("wr") or stats.get("win_rate")
-        total = stats.get("total") or stats.get("count") or stats.get("signals") or stats.get("total_signals")
+        wr = stats.get("winrate")
+        total = stats.get("total")
         if wr is not None:
-            if isinstance(wr, (int, float)):
-                wr_str = f"{wr:.1f}%" if wr <= 1.5 else f"{wr:.1f}%"
-            else:
+            try:
+                wr_str = f"{float(wr):.1f}%"
+            except (ValueError, TypeError):
                 wr_str = str(wr)
-            if total is not None:
-                lines.append(_line(f"WR \u043f\u0430\u0440\u044b (24\u0447): {wr_str} ({total} \u0441\u0438\u0433\u043d.)", W))
-            else:
-                lines.append(_line(f"WR \u043f\u0430\u0440\u044b (24\u0447): {wr_str}", W))
+            total_str = f" ({total} \u0441\u0438\u0433\u043d.)" if total else ""
+            lines.append(_line(f"WR \u043f\u0430\u0440\u044b (24\u0447): {wr_str}{total_str}", W))
         else:
-            keys = ", ".join(list(stats.keys())[:3])
-            lines.append(_line(f"WR (\u0444\u043e\u0440\u043c\u0430\u0442?): {keys}", W))
+            lines.append(_line("WR \u043f\u0430\u0440\u044b (24\u0447): \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445", W))
     else:
         lines.append(_line("WR \u043f\u0430\u0440\u044b (24\u0447): \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445", W))
 
     lines.append(sep)
-    lines.append(_line("\u26a0 \u0410\u043d\u0430\u043b\u0438\u0437, \u043d\u0435 \u0433\u0430\u0440\u0430\u043d\u0442\u0438\u044f. \u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0433\u0440\u0430\u0444\u0438\u043a \u0432\u0440\u0443\u0447\u043d\u0443\u044e.", W))
+    lines.append(_line("\u26a0 \u0410\u043d\u0430\u043b\u0438\u0437, \u043d\u0435 \u0433\u0430\u0440\u0430\u043d\u0442\u0438\u044f. \u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0433\u0440\u0430\u0444\u0438\u043a.", W))
     lines.append(bot)
     print("\n".join(lines))
 
@@ -196,34 +259,30 @@ async def main():
         pair = base.upper() + "_" + suffix.lower()
     else:
         pair = raw.upper() + "_otc"
+
     ssid = load_ssid()
     if not ssid:
-        print("❌ SSID не найден (~/.po_ssid или PO_SSID)")
+        print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d (~/.po_ssid \u0438\u043b\u0438 PO_SSID)")
         sys.exit(1)
 
     cfg = load_cfg()
 
+    # PATCH_073: monkey-patch analyzer_bot для Classic
+    # (безопасно: бот в другом процессе, его CFG/fetch не затронуты)
+    classic_cfg = dict(cfg)
+    classic_cfg["strategy_mode"] = "Classic"
+    analyzer_bot.CFG = classic_cfg
+    analyzer_bot.fetch_candles = fetch_candles_safe
+    analyzer_bot.get_current_price = get_current_price_safe
+
+    print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}: Classic + SR_CCI...")
+
     async with PocketOptionAsync(ssid=ssid) as client:
-        try:
-            result = await asyncio.wait_for(
-                full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
-                timeout=60,
-            )
-        except asyncio.TimeoutError:
-            print(f"⚠ Таймаут анализа {pair} (>60 сек). Попробуйте ещё раз.")
-            sys.exit(2)
+        classic_sig, sr_sig, price, c_reason, s_reason = await combined_analysis(client, pair, cfg)
 
-    # full_analysis_sr_cci возвращает (signal, price, reason)
-    if isinstance(result, tuple) and len(result) >= 3:
-        signal, price, reason = result[0], result[1], result[2]
-    elif isinstance(result, tuple) and len(result) == 2:
-        signal, price = result[0], result[1]
-        reason = ""
-    else:
-        signal, price, reason = result, None, ""
-
+    final_sig, status = pick_final(classic_sig, sr_sig)
     stats = load_pair_stats(pair)
-    print_card(pair, signal, price, reason, stats)
+    print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats)
 
 
 if __name__ == "__main__":
