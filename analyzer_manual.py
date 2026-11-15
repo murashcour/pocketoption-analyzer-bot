@@ -151,7 +151,7 @@ async def combined_analysis(ssid, pair, cfg):
         async with PocketOptionAsync(ssid=ssid) as client:
             r = await asyncio.wait_for(
                 full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
-                timeout=60
+                timeout=30
             )
             if isinstance(r, tuple) and len(r) >= 3:
                 sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
@@ -215,8 +215,11 @@ def print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats, c_rea
     if classic_sig is None and c_reason and c_reason != "OK":
         _cr = str(c_reason)[:W - 16]
         lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {_cr}", W))
-    lines.append(_line(f"SR_CCI:      {_sig(sr_sig)}", W))
-    if sr_sig is None and s_reason and s_reason != "OK":
+    sr_display = _sig(sr_sig)
+    if sr_sig is None and s_reason == "TIMEOUT":
+        sr_display = "\u2014 (\u0442\u0430\u0439\u043c\u0430\u0443\u0442)"
+    lines.append(_line(f"SR_CCI:      {sr_display}", W))
+    if sr_sig is None and s_reason and s_reason not in ("OK", "TIMEOUT"):
         _sr = str(s_reason)[:W - 16]
         lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {_sr}", W))
     lines.append(sep)
@@ -291,6 +294,14 @@ async def main():
     final_sig, status = pick_final(classic_sig, sr_sig)
     stats = load_pair_stats(pair)
     print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats, c_reason, s_reason)
+
+    # PATCH_075: os._exit — обход зависающего __aexit__ клиента (мёртвый websocket)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)
 
 
 if __name__ == "__main__":
