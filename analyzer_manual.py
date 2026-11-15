@@ -1,37 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-analyzer_manual.py (PATCH_072): ручной анализатор по выбранной паре.
-Read-only: только печатает сигнал + WR пары из pair_stats_sr_cci.json.
-НЕ открывает сделки.
+analyzer_manual.py (PATCH_082): ручной анализатор по выбранной паре.
+Read-only. Classic — primary, SR_CCI — справочно. WR из обоих JSON.
 
 Использование:
-  python analyzer_manual.py EURUSD_otc
-  python analyzer_manual.py GBPJPY_otc
+    python analyzer_manual.py EURHUF_otc
+
+Требование: бот (analyzer_bot.py) должен быть остановлен (иначе live-свечи висят).
 """
 import asyncio
 import json
-import logging
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from BinaryOptionsToolsV2 import PocketOptionAsync
 
-# PATCH_073: Classic через full_analysis из analyzer_bot, SR_CCI через strategy_sr_cci
 import analyzer_bot
-from analyzer_bot import full_analysis as classic_full_analysis
+from analyzer_bot import (
+    fetch_candles,
+    get_current_price,
+    full_analysis as classic_full_analysis,
+    load_config,
+)
 from strategy_sr_cci import full_analysis_sr_cci, get_close
-
-logging.basicConfig(level=logging.WARNING, format="%(levelname)s | %(message)s")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
-STATS_FILE = Path(BASE_DIR) / "pair_stats_sr_cci.json"
+CLASSIC_STATS = Path(BASE_DIR) / "pair_stats_classic.json"
+SR_CCI_STATS = Path(BASE_DIR) / "pair_stats_sr_cci.json"
 SSID_FILE = os.path.expanduser("~/.po_ssid")
 
 
-def load_ssid() -> str:
+def load_ssid():
     s = os.getenv("PO_SSID", "").strip()
     if not s and os.path.exists(SSID_FILE):
         with open(SSID_FILE) as f:
@@ -39,40 +43,32 @@ def load_ssid() -> str:
     return s
 
 
-def load_cfg() -> dict:
+def load_cfg():
     if not os.path.exists(CONFIG_FILE):
         print(f"❌ config.json не найден: {CONFIG_FILE}")
         sys.exit(1)
     return json.loads(Path(CONFIG_FILE).read_text(encoding="utf-8"))
 
 
-def load_pair_stats(pair: str) -> dict:
-    """PATCH_077: читает оба JSON — Classic и SR_CCI.
-    Возвращает {"classic": {...} | None, "sr_cci": {...} | None}."""
-    out = {"classic": None, "sr_cci": None}
-    for key, fname in (("classic", "pair_stats_classic.json"),
-                       ("sr_cci", "pair_stats_sr_cci.json")):
-        p = Path(BASE_DIR) / fname
-        if not p.exists():
-            continue
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(data, dict):
-            continue
-        stats = data.get(pair) or data.get(pair.lower()) or data.get(pair.upper())
-        if isinstance(stats, dict) and "total" not in stats:
-            w = stats.get("wins", 0) or 0
-            l = stats.get("losses", 0) or 0
-            if w or l:
-                stats["total"] = int(w) + int(l)
-        if isinstance(stats, dict):
-            out[key] = stats
-    return out
+def load_stats_one(pair, path):
+    if not path.exists():
+        return None
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    st = d.get(pair) or d.get(pair.lower()) or d.get(pair.upper())
+    if isinstance(st, dict) and "total" not in st:
+        w = int(st.get("wins", 0) or 0)
+        l = int(st.get("losses", 0) or 0)
+        if w or l:
+            st["total"] = w + l
+    return st
 
 
-def _dw(s: str) -> int:
+def _dw(s):
     import unicodedata
     w = 0
     for ch in s:
@@ -83,15 +79,14 @@ def _dw(s: str) -> int:
     return w
 
 
-def _line(content: str, W: int = 50) -> str:
+def _line(content, W=50):
     import re
     clean = re.sub(r"\033\[[0-9;]*m", "", content)
     pad = max(0, W - _dw(clean))
     return f"\u2551 {content}{' ' * pad} \u2551"
 
 
-def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""):
-    """PATCH_077: Classic primary, SR_CCI справочно. WR — оба."""
+def print_card(pair, classic_sig, sr_sig, price, c_stats, s_stats, c_reason, s_reason):
     W = 50
     BLUE = "\033[94m"
     RED = "\033[91m"
@@ -103,27 +98,20 @@ def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""
     top = "\u2554" + "\u2550" * (W + 2) + "\u2557"
     bot = "\u255a" + "\u2550" * (W + 2) + "\u255d"
 
-    def _sig(s):
-        if s == "CALL": return "CALL"
-        if s == "PUT": return "PUT"
-        return "\u2014"
+    def sig(s):
+        return s if s in ("CALL", "PUT") else "\u2014"
 
-    lines = [
-        top,
-        _line(f"\U0001F3AF \u0410\u041d\u0410\u041b\u0418\u0417: {pair}", W),
-        sep,
-    ]
+    lines = [top, _line(f"\U0001F3AF \u0410\u041d\u0410\u041b\u0418\u0417: {pair}", W), sep]
     if price is not None:
         lines.append(_line(f"\u0426\u0435\u043d\u0430:        {price:.5f}", W))
 
-    # --- Classic (primary) ---
-    lines.append(_line(f"Classic:     {_sig(classic_sig)}", W))
-    if classic_sig is None and c_reason and c_reason != "OK":
-        _cr = str(c_reason)[:W - 16]
-        lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {_cr}", W))
+    # Classic (primary)
+    lines.append(_line(f"Classic:     {sig(classic_sig)}", W))
+    if classic_sig is None and c_reason and c_reason not in ("OK", "NO_SIGNAL"):
+        lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {str(c_reason)[:W-16]}", W))
     lines.append(sep)
 
-    # --- ИТОГ по Classic ---
+    # ИТОГ по Classic
     if classic_sig == "CALL":
         lines.append(_line(f"\u0418\u0422\u041e\u0413:        {BLUE}\u2b06 CALL{RESET}", W))
     elif classic_sig == "PUT":
@@ -132,7 +120,7 @@ def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""
         lines.append(_line(f"\u0418\u0422\u041e\u0413:        {GRAY}\u23f8 \u041d\u0435\u0442 \u0441\u0438\u0433\u043d\u0430\u043b\u0430{RESET}", W))
     lines.append(sep)
 
-    # --- SR_CCI (справочно) ---
+    # SR_CCI (справочно)
     lines.append(_line("\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u043e:", W))
     if sr_sig in ("CALL", "PUT"):
         if classic_sig == sr_sig:
@@ -141,32 +129,25 @@ def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""
             line = f"  SR_CCI:    {sr_sig} (\u043f\u0440\u043e\u0442\u0438\u0432\u043e\u043f\u043e\u043b\u043e\u0436\u043d\u043e)"
         else:
             line = f"  SR_CCI:    {sr_sig} (\u0442\u043e\u043b\u044c\u043a\u043e SR_CCI)"
-        if len(line) > W:
-            line = line[:W - 1] + "."
-        lines.append(_line(line, W))
+        lines.append(_line(line[:W], W))
     elif s_reason == "TIMEOUT":
         lines.append(_line("  SR_CCI:    \u2014 (\u0442\u0430\u0439\u043c\u0430\u0443\u0442)", W))
-    elif s_reason and s_reason not in ("OK", "SKIP"):
-        _sr = s_reason[:W - 16]
-        lines.append(_line(f"  SR_CCI:    \u2014 ({_sr})", W))
+    elif s_reason and s_reason not in ("OK", "SKIP", "NO_SIGNAL"):
+        lines.append(_line(f"  SR_CCI:    \u2014 ({str(s_reason)[:W-16]})", W))
     else:
         lines.append(_line("  SR_CCI:    \u2014 (\u043d\u0435\u0442 \u0441\u0438\u0433\u043d\u0430\u043b\u0430)", W))
     lines.append(sep)
 
-    # --- WR: оба ---
+    # WR: оба
     lines.append(_line("WR (24\u0447):", W))
-    c = stats.get("classic") or {}
-    if c.get("winrate") is not None:
-        wr = c["winrate"]
-        t = c.get("total", "?")
+    if c_stats and c_stats.get("winrate") is not None:
+        wr = c_stats["winrate"]; t = c_stats.get("total", "?")
         col = GREEN if wr >= 52 else (YELLOW if wr >= 50 else RED)
         lines.append(_line(f"  Classic:   {col}{wr:.1f}%{RESET} ({t} \u0441\u0438\u0433\u043d.)", W))
     else:
         lines.append(_line("  Classic:   \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445", W))
-    s = stats.get("sr_cci") or {}
-    if s.get("winrate") is not None:
-        wr = s["winrate"]
-        t = s.get("total", "?")
+    if s_stats and s_stats.get("winrate") is not None:
+        wr = s_stats["winrate"]; t = s_stats.get("total", "?")
         col = GREEN if wr >= 52 else (YELLOW if wr >= 50 else RED)
         lines.append(_line(f"  SR_CCI:    {col}{wr:.1f}%{RESET} ({t} \u0441\u0438\u0433\u043d.)", W))
     else:
@@ -178,67 +159,54 @@ def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""
     print("\n".join(lines))
 
 
-async def check_active_pair(ssid: str, pair: str) -> bool:
-    """PATCH_079: быстрая проверка — есть ли пара в active_assets.
-    True — активна, False — нет (мёртвая / недоступна)."""
-    try:
-        async with PocketOptionAsync(ssid=ssid) as client:
-            assets = await asyncio.wait_for(client.active_assets(), timeout=10)
-        symbols = {a.get("symbol") for a in assets if a.get("is_active")}
-        return pair in symbols
-    except Exception as e:
-        # Не блокируем — если проверка упала, пробуем анализ (лучше так, чем отказ)
-        print(f"\u26a0 \u041f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 active_assets: {type(e).__name__}: {e}")
-        return True
-
-
-async def combined_analysis(ssid, pair, cfg):
-    """PATCH_077c: Classic primary (60s), SR_CCI справочно (30s).
-    Два отдельных PocketOptionAsync — live-генератор Classic закрывает websocket."""
+async def analyze_pair(client, pair, cfg):
+    """Одна сессия. Classic (25с) + SR_CCI (20с). Родные функции бота."""
     classic_sig = None
     classic_reason = "SKIP"
     price = None
+    t0 = time.time()
     try:
-        async with PocketOptionAsync(ssid=ssid) as client:
-            r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=60)
-            if isinstance(r, tuple) and len(r) >= 3:
-                classic_sig, price, classic_reason = r[0], r[1], r[2]
-            elif isinstance(r, tuple) and len(r) == 2:
-                classic_sig, price = r[0], r[1]
-                classic_reason = "OK" if classic_sig else "NO_SIGNAL"
+        r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=25)
+        if isinstance(r, tuple) and len(r) >= 3:
+            classic_sig, price, classic_reason = r[0], r[1], r[2]
+        elif isinstance(r, tuple) and len(r) == 2:
+            classic_sig, price = r[0], r[1]
+            classic_reason = "OK" if classic_sig else "NO_SIGNAL"
     except asyncio.TimeoutError:
         classic_reason = "TIMEOUT"
     except Exception as e:
         classic_reason = f"ERR:{type(e).__name__}"
+    print(f"   Classic: {classic_sig or '—'} ({classic_reason}) [{time.time()-t0:.1f}s]")
 
     sr_sig = None
     sr_reason = "SKIP"
+    t0 = time.time()
     try:
-        async with PocketOptionAsync(ssid=ssid) as client:
-            r = await asyncio.wait_for(
-                full_analysis_sr_cci(client, pair, cfg, analyzer_bot.fetch_candles, analyzer_bot.get_current_price),
-                timeout=30
-            )
-            if isinstance(r, tuple) and len(r) >= 3:
-                sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
-                if price is None:
-                    price = sr_price
-            elif isinstance(r, tuple) and len(r) == 2:
-                sr_sig, sr_price = r[0], r[1]
-                if price is None:
-                    price = sr_price
-                sr_reason = "OK" if sr_sig else "NO_SIGNAL"
+        r = await asyncio.wait_for(
+            full_analysis_sr_cci(client, pair, cfg, fetch_candles, get_current_price),
+            timeout=20
+        )
+        if isinstance(r, tuple) and len(r) >= 3:
+            sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
+            if price is None:
+                price = sr_price
+        elif isinstance(r, tuple) and len(r) == 2:
+            sr_sig, sr_price = r[0], r[1]
+            if price is None:
+                price = sr_price
+            sr_reason = "OK" if sr_sig else "NO_SIGNAL"
     except asyncio.TimeoutError:
         sr_reason = "TIMEOUT"
     except Exception as e:
         sr_reason = f"ERR:{type(e).__name__}"
+    print(f"   SR_CCI:  {sr_sig or '—'} ({sr_reason}) [{time.time()-t0:.1f}s]")
 
     return classic_sig, sr_sig, price, classic_reason, sr_reason
 
 
 async def main():
     if len(sys.argv) < 2:
-        print("Использование: python analyzer_manual.py EURUSD_otc")
+        print("Использование: python analyzer_manual.py EURHUF_otc")
         sys.exit(1)
 
     raw = sys.argv[1].strip()
@@ -250,53 +218,29 @@ async def main():
 
     ssid = load_ssid()
     if not ssid:
-        print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
+        print("❌ SSID не найден")
         sys.exit(1)
 
-    # PATCH_081: проверка, что бот не работает (иначе get_candles_live виснет)
-    import subprocess
-    _pg = subprocess.run(["pgrep", "-f", "analyzer_bot.py"], capture_output=True, text=True)
-    if _pg.stdout.strip():
-        pids = ", ".join(_pg.stdout.strip().split())
-        print(f"\u26a0 \u0411\u043e\u0442 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 (PID: {pids}).")
-        print("   \u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u0435 \u0431\u043e\u0442\u0430 \u043f\u0435\u0440\u0435\u0434 \u0437\u0430\u043f\u0443\u0441\u043a\u043e\u043c \u0430\u043d\u0430\u043b\u0438\u0437\u0430\u0442\u043e\u0440\u0430.")
-        print("   touch stop.flag  # \u0438\u043b\u0438  pkill -f analyzer_bot.py")
+    # pgrep-проверка
+    pg = subprocess.run(["pgrep", "-f", "analyzer_bot.py"], capture_output=True, text=True)
+    if pg.stdout.strip():
+        pids = ", ".join(pg.stdout.strip().split())
+        print(f"⚠ Бот работает (PID: {pids}). Остановите перед анализатором.")
+        print("   touch stop.flag  # или  pkill -f analyzer_bot.py")
         sys.exit(2)
 
     cfg = load_cfg()
-
-    # PATCH_079: быстрая проверка active_assets (2-3 сек)
-    print(f"\u23f3 \u041f\u0440\u043e\u0432\u0435\u0440\u044f\u044e \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e\u0441\u0442\u044c {pair}...")
-    if not await check_active_pair(ssid, pair):
-        print(f"\u26a0 {pair} \u043d\u0435\u0442 \u0432 active_assets \u2014 \u043f\u0430\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u0441\u0435\u0439\u0447\u0430\u0441")
-        try:
-            sys.stdout.flush()
-        except Exception:
-            pass
-        os._exit(3)
-
-    # PATCH_081b: monkey-patch только CFG. Родные fetch_candles/get_current_price — не трогаем.
     classic_cfg = dict(cfg)
     classic_cfg["strategy_mode"] = "Classic"
     analyzer_bot.CFG = classic_cfg
 
-    print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}...")
+    print(f"⏳ Анализ {pair}...")
+    async with PocketOptionAsync(ssid=ssid) as client:
+        classic_sig, sr_sig, price, c_reason, s_reason = await analyze_pair(client, pair, cfg)
 
-    # PATCH_079: общий таймаут 45с (защита от зависания)
-    try:
-        classic_sig, sr_sig, price, c_reason, s_reason = await asyncio.wait_for(
-            combined_analysis(ssid, pair, cfg), timeout=45
-        )
-    except asyncio.TimeoutError:
-        print(f"\u26a0 \u041e\u0431\u0449\u0438\u0439 \u0442\u0430\u0439\u043c\u0430\u0443\u0442 \u0430\u043d\u0430\u043b\u0438\u0437\u0430 {pair} (>45\u0441)")
-        try:
-            sys.stdout.flush()
-        except Exception:
-            pass
-        os._exit(4)
-
-    stats = load_pair_stats(pair)
-    print_card(pair, classic_sig, sr_sig, price, stats, c_reason, s_reason)
+    c_stats = load_stats_one(pair, CLASSIC_STATS)
+    s_stats = load_stats_one(pair, SR_CCI_STATS)
+    print_card(pair, classic_sig, sr_sig, price, c_stats, s_stats, c_reason, s_reason)
 
     try:
         sys.stdout.flush()
@@ -310,4 +254,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n\u23f9 Остановлено")
+        print("\n⏹ Остановлено")
