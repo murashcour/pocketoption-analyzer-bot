@@ -9,7 +9,7 @@ from BinaryOptionsToolsV2 import PocketOptionAsync
 
 FIRST_BET = 1.0
 MULTIPLIER = 2.3
-MAX_STEPS = 7
+MAX_STEPS = int(os.getenv("MM_MAX_STEPS", "5"))
 PAYOUT = 0.92
 TARGET_PCT = 10.0
 STOP_LOSS_PCT = 35.0
@@ -35,6 +35,7 @@ class ManualManager:
         self.wins_by_attempt = {i: 0 for i in range(1, 8)}
         self.last_deal = None
         self.started_wall = 0.0
+        self.last_hud_write = 0.0
         
         cumulative_loss = 0.0
         for i in range(MAX_STEPS):
@@ -253,7 +254,7 @@ class ManualManager:
                             self._print_card(); self._write_hud()
                         else:
                             self.losses += 1
-                            if self.current_step < MAX_STEPS:
+                            if MODE == "manual" and self.current_step < MAX_STEPS:
                                 self.current_step += 1
                                 print(f"\n❌ LOSS {asset}: -${abs(profit):.2f}. Переход на шаг {self.current_step}.")
                                 print(f"🎯 СТАВКА: ${self.get_bet():.2f} (Шаг {self.current_step}/{MAX_STEPS})")
@@ -282,6 +283,9 @@ class ManualManager:
                                 print(f"\n🛑 СТОП-ЛОСС! PnL: {pnl_pct:+.2f}%. ОСТАНОВИСЬ.")
                                 self.stopped = True; break
 
+                    if time.time() - self.last_hud_write > 15:
+                        self._write_hud()
+                        self.last_hud_write = time.time()
                     await asyncio.sleep(3)
                 except Exception as e:
                     print(f"⚠ Ошибка: {e}")
