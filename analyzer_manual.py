@@ -65,20 +65,36 @@ def load_pair_stats(pair: str):
 
 
 async def fetch_candles_safe(client, asset: str, period: int, count: int):
-    """PATCH_072d: get_candles, cap для больших ТФ, retry при таймауте."""
+    """PATCH_072e: большие ТФ — get_candles_live, маленькие — get_candles.
+    get_candles(300) висит при параллельном боте, live(300) работает (68 свечей).
+    Обратное для 1м: get_candles(60) работает, live(60) висит."""
     if period >= 300:
-        count = min(count, 60)  # 100 свечей на 5м висит; 60 хватает для EMA50
+        # 5м/15м — live (get_candles виснет)
+        result = []
+        try:
+            async def _collect():
+                async for closed, forming in client.get_candles_live(asset, period, count):
+                    if isinstance(closed, list):
+                        result.extend(closed)
+                    if isinstance(forming, dict):
+                        result.append(forming)
+                    if len(result) >= count:
+                        break
+            await asyncio.wait_for(_collect(), timeout=25)
+            return result[:count]
+        except asyncio.TimeoutError:
+            print(f"⚠ fetch_candles_safe({asset}, {period}): live таймаут 25с (собрано {len(result)})")
+            return result[:count]
+        except Exception as e:
+            print(f"⚠ fetch_candles_safe({asset}, {period}): live {type(e).__name__}: {e}")
+            return result[:count]
+    # 1м/3м — get_candles (live виснет)
     try:
         candles = await asyncio.wait_for(client.get_candles(asset, period, count), timeout=20)
         return candles or []
     except asyncio.TimeoutError:
-        await asyncio.sleep(2)
-        try:
-            candles = await asyncio.wait_for(client.get_candles(asset, period, count), timeout=15)
-            return candles or []
-        except asyncio.TimeoutError:
-            print(f"⚠ fetch_candles_safe({asset}, {period}): таймаут после retry")
-            return []
+        print(f"⚠ fetch_candles_safe({asset}, {period}): таймаут 20с")
+        return []
     except Exception as e:
         print(f"⚠ fetch_candles_safe({asset}, {period}): {type(e).__name__}: {e}")
         return []
