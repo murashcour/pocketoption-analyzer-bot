@@ -46,128 +46,30 @@ def load_cfg() -> dict:
     return json.loads(Path(CONFIG_FILE).read_text(encoding="utf-8"))
 
 
-def load_pair_stats(pair: str):
-    """Возвращает stats для пары или None. Формат — как в pair_stats_sr_cci.json."""
-    if not STATS_FILE.exists():
-        return None
-    try:
-        data = json.loads(STATS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if isinstance(data, dict):
+def load_pair_stats(pair: str) -> dict:
+    """PATCH_077: читает оба JSON — Classic и SR_CCI.
+    Возвращает {"classic": {...} | None, "sr_cci": {...} | None}."""
+    out = {"classic": None, "sr_cci": None}
+    for key, fname in (("classic", "pair_stats_classic.json"),
+                       ("sr_cci", "pair_stats_sr_cci.json")):
+        p = Path(BASE_DIR) / fname
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
         stats = data.get(pair) or data.get(pair.lower()) or data.get(pair.upper())
-        # PATCH_072b: total = wins + losses, если не задан явно
         if isinstance(stats, dict) and "total" not in stats:
             w = stats.get("wins", 0) or 0
             l = stats.get("losses", 0) or 0
             if w or l:
                 stats["total"] = int(w) + int(l)
-        return stats
-    return None
-
-
-async def fetch_candles_safe(client, asset: str, period: int, count: int):
-    """PATCH_073: >=900 → [], иначе как 072e (300+ live, <300 get_candles)."""
-    if period >= 900:
-        return []  # 15м в Classic убран (SERVER_FIX), SR_CCI не использует
-    if period >= 300:
-        # 5м/15м — live (get_candles виснет)
-        result = []
-        try:
-            async def _collect():
-                async for closed, forming in client.get_candles_live(asset, period, count):
-                    if isinstance(closed, list):
-                        result.extend(closed)
-                    if isinstance(forming, dict):
-                        result.append(forming)
-                    if len(result) >= count:
-                        break
-            await asyncio.wait_for(_collect(), timeout=25)
-            return result[:count]
-        except asyncio.TimeoutError:
-            print(f"⚠ fetch_candles_safe({asset}, {period}): live таймаут 25с (собрано {len(result)})")
-            return result[:count]
-        except Exception as e:
-            print(f"⚠ fetch_candles_safe({asset}, {period}): live {type(e).__name__}: {e}")
-            return result[:count]
-    # 1м/3м — get_candles (live виснет)
-    try:
-        candles = await asyncio.wait_for(client.get_candles(asset, period, count), timeout=20)
-        return candles or []
-    except asyncio.TimeoutError:
-        print(f"⚠ fetch_candles_safe({asset}, {period}): таймаут 20с")
-        return []
-    except Exception as e:
-        print(f"⚠ fetch_candles_safe({asset}, {period}): {type(e).__name__}: {e}")
-        return []
-
-
-async def get_current_price_safe(client, pair: str):
-    """PATCH_072c: цена из закрытой свечи 1м (get_candles)."""
-    try:
-        candles = await asyncio.wait_for(client.get_candles(pair, 60, 2), timeout=10)
-        if candles:
-            return get_close(candles[-1])
-    except Exception:
-        pass
-    return None
-
-
-def pick_final(classic_sig, sr_sig):
-    """Возвращает (final_sig, status): STRONG / WEAK / CONFLICT / NONE."""
-    if classic_sig == sr_sig and classic_sig in ("CALL", "PUT"):
-        return classic_sig, "STRONG"
-    if classic_sig in ("CALL", "PUT") and sr_sig in ("CALL", "PUT"):
-        return None, "CONFLICT"
-    if classic_sig in ("CALL", "PUT"):
-        return classic_sig, "WEAK"
-    if sr_sig in ("CALL", "PUT"):
-        return sr_sig, "WEAK"
-    return None, "NONE"
-
-
-async def combined_analysis(ssid, pair, cfg):
-    """PATCH_074: два отдельных PocketOptionAsync.
-    Live-генератор Classic закрывает websocket — SR_CCI в новой сессии."""
-    classic_sig = None
-    classic_reason = "SKIP"
-    price = None
-    try:
-        async with PocketOptionAsync(ssid=ssid) as client:
-            r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=60)
-            if isinstance(r, tuple) and len(r) >= 3:
-                classic_sig, price, classic_reason = r[0], r[1], r[2]
-            elif isinstance(r, tuple) and len(r) == 2:
-                classic_sig, price = r[0], r[1]
-                classic_reason = "OK" if classic_sig else "NO_SIGNAL"
-    except asyncio.TimeoutError:
-        classic_reason = "TIMEOUT"
-    except Exception as e:
-        classic_reason = f"ERR:{type(e).__name__}"
-
-    sr_sig = None
-    sr_reason = "SKIP"
-    try:
-        async with PocketOptionAsync(ssid=ssid) as client:
-            r = await asyncio.wait_for(
-                full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
-                timeout=30
-            )
-            if isinstance(r, tuple) and len(r) >= 3:
-                sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
-                if price is None:
-                    price = sr_price
-            elif isinstance(r, tuple) and len(r) == 2:
-                sr_sig, sr_price = r[0], r[1]
-                if price is None:
-                    price = sr_price
-                sr_reason = "OK" if sr_sig else "NO_SIGNAL"
-    except asyncio.TimeoutError:
-        sr_reason = "TIMEOUT"
-    except Exception as e:
-        sr_reason = f"ERR:{type(e).__name__}"
-
-    return classic_sig, sr_sig, price, classic_reason, sr_reason
+        if isinstance(stats, dict):
+            out[key] = stats
+    return out
 
 
 def _dw(s: str) -> int:
@@ -188,12 +90,14 @@ def _line(content: str, W: int = 50) -> str:
     return f"\u2551 {content}{' ' * pad} \u2551"
 
 
-def print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats, c_reason="", s_reason=""):
+def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""):
+    """PATCH_077: Classic primary, SR_CCI справочно. WR — оба."""
     W = 50
     BLUE = "\033[94m"
     RED = "\033[91m"
     YELLOW = "\033[93m"
     GRAY = "\033[90m"
+    GREEN = "\033[92m"
     RESET = "\033[0m"
     sep = "\u2560" + "\u2550" * (W + 2) + "\u2563"
     top = "\u2554" + "\u2550" * (W + 2) + "\u2557"
@@ -211,48 +115,62 @@ def print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats, c_rea
     ]
     if price is not None:
         lines.append(_line(f"\u0426\u0435\u043d\u0430:        {price:.5f}", W))
+
+    # --- Classic (primary) ---
     lines.append(_line(f"Classic:     {_sig(classic_sig)}", W))
     if classic_sig is None and c_reason and c_reason != "OK":
         _cr = str(c_reason)[:W - 16]
         lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {_cr}", W))
-    sr_display = _sig(sr_sig)
-    if sr_sig is None and s_reason == "TIMEOUT":
-        sr_display = "\u2014 (\u0442\u0430\u0439\u043c\u0430\u0443\u0442)"
-    lines.append(_line(f"SR_CCI:      {sr_display}", W))
-    if sr_sig is None and s_reason and s_reason not in ("OK", "TIMEOUT"):
-        _sr = str(s_reason)[:W - 16]
-        lines.append(_line(f"  \u043f\u0440\u0438\u0447\u0438\u043d\u0430:   {_sr}", W))
     lines.append(sep)
 
-    if status == "STRONG" and final_sig == "CALL":
+    # --- ИТОГ по Classic ---
+    if classic_sig == "CALL":
         lines.append(_line(f"\u0418\u0422\u041e\u0413:        {BLUE}\u2b06 CALL{RESET}", W))
-    elif status == "STRONG" and final_sig == "PUT":
+    elif classic_sig == "PUT":
         lines.append(_line(f"\u0418\u0422\u041e\u0413:        {RED}\u2b07 PUT{RESET}", W))
-    elif status == "CONFLICT":
-        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {YELLOW}\u2696 \u041a\u041e\u041d\u0424\u041b\u0418\u041a\u0422 \u2014 \u043f\u0440\u043e\u043f\u0443\u0441\u043a{RESET}", W))
-    elif status == "WEAK" and final_sig == "CALL":
-        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {YELLOW}\u2b06 CALL (\u0441\u043b\u0430\u0431\u044b\u0439){RESET}", W))
-    elif status == "WEAK" and final_sig == "PUT":
-        lines.append(_line(f"\u0418\u0422\u041e\u0413:        {YELLOW}\u2b07 PUT (\u0441\u043b\u0430\u0431\u044b\u0439){RESET}", W))
     else:
         lines.append(_line(f"\u0418\u0422\u041e\u0413:        {GRAY}\u23f8 \u041d\u0435\u0442 \u0441\u0438\u0433\u043d\u0430\u043b\u0430{RESET}", W))
-
     lines.append(sep)
 
-    if stats:
-        wr = stats.get("winrate")
-        total = stats.get("total")
-        if wr is not None:
-            try:
-                wr_str = f"{float(wr):.1f}%"
-            except (ValueError, TypeError):
-                wr_str = str(wr)
-            total_str = f" ({total} \u0441\u0438\u0433\u043d.)" if total else ""
-            lines.append(_line(f"WR \u043f\u0430\u0440\u044b (24\u0447): {wr_str}{total_str}", W))
+    # --- SR_CCI (справочно) ---
+    lines.append(_line("\u0421\u043f\u0440\u0430\u0432\u043e\u0447\u043d\u043e:", W))
+    if sr_sig in ("CALL", "PUT"):
+        if classic_sig == sr_sig:
+            line = f"  SR_CCI:    {sr_sig} (\u0441\u043e\u0432\u043f\u0430\u0434\u0430\u0435\u0442)"
+        elif classic_sig in ("CALL", "PUT"):
+            line = f"  SR_CCI:    {sr_sig} (\u043f\u0440\u043e\u0442\u0438\u0432\u043e\u043f\u043e\u043b\u043e\u0436\u043d\u043e)"
         else:
-            lines.append(_line("WR \u043f\u0430\u0440\u044b (24\u0447): \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445", W))
+            line = f"  SR_CCI:    {sr_sig} (\u0442\u043e\u043b\u044c\u043a\u043e SR_CCI)"
+        if len(line) > W:
+            line = line[:W - 1] + "."
+        lines.append(_line(line, W))
+    elif s_reason == "TIMEOUT":
+        lines.append(_line("  SR_CCI:    \u2014 (\u0442\u0430\u0439\u043c\u0430\u0443\u0442)", W))
+    elif s_reason and s_reason not in ("OK", "SKIP"):
+        _sr = s_reason[:W - 16]
+        lines.append(_line(f"  SR_CCI:    \u2014 ({_sr})", W))
     else:
-        lines.append(_line("WR \u043f\u0430\u0440\u044b (24\u0447): \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445", W))
+        lines.append(_line("  SR_CCI:    \u2014 (\u043d\u0435\u0442 \u0441\u0438\u0433\u043d\u0430\u043b\u0430)", W))
+    lines.append(sep)
+
+    # --- WR: оба ---
+    lines.append(_line("WR (24\u0447):", W))
+    c = stats.get("classic") or {}
+    if c.get("winrate") is not None:
+        wr = c["winrate"]
+        t = c.get("total", "?")
+        col = GREEN if wr >= 52 else (YELLOW if wr >= 50 else RED)
+        lines.append(_line(f"  Classic:   {col}{wr:.1f}%{RESET} ({t} \u0441\u0438\u0433\u043d.)", W))
+    else:
+        lines.append(_line("  Classic:   \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445", W))
+    s = stats.get("sr_cci") or {}
+    if s.get("winrate") is not None:
+        wr = s["winrate"]
+        t = s.get("total", "?")
+        col = GREEN if wr >= 52 else (YELLOW if wr >= 50 else RED)
+        lines.append(_line(f"  SR_CCI:    {col}{wr:.1f}%{RESET} ({t} \u0441\u0438\u0433\u043d.)", W))
+    else:
+        lines.append(_line("  SR_CCI:    \u043d\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0445", W))
 
     lines.append(sep)
     lines.append(_line("\u26a0 \u0410\u043d\u0430\u043b\u0438\u0437, \u043d\u0435 \u0433\u0430\u0440\u0430\u043d\u0442\u0438\u044f. \u041f\u0440\u043e\u0432\u0435\u0440\u044c \u0433\u0440\u0430\u0444\u0438\u043a.", W))
@@ -274,28 +192,25 @@ async def main():
 
     ssid = load_ssid()
     if not ssid:
-        print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d (~/.po_ssid \u0438\u043b\u0438 PO_SSID)")
+        print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
         sys.exit(1)
 
     cfg = load_cfg()
 
-    # PATCH_073: monkey-patch analyzer_bot для Classic
-    # (безопасно: бот в другом процессе, его CFG/fetch не затронуты)
+    # PATCH_077: Classic primary (SR_CCI справочно, не блокирует)
     classic_cfg = dict(cfg)
     classic_cfg["strategy_mode"] = "Classic"
     analyzer_bot.CFG = classic_cfg
     analyzer_bot.fetch_candles = fetch_candles_safe
     analyzer_bot.get_current_price = get_current_price_safe
 
-    print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}: Classic + SR_CCI...")
+    print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}...")
 
     classic_sig, sr_sig, price, c_reason, s_reason = await combined_analysis(ssid, pair, cfg)
 
-    final_sig, status = pick_final(classic_sig, sr_sig)
     stats = load_pair_stats(pair)
-    print_card(pair, classic_sig, sr_sig, final_sig, status, price, stats, c_reason, s_reason)
+    print_card(pair, classic_sig, sr_sig, price, stats, c_reason, s_reason)
 
-    # PATCH_075: os._exit — обход зависающего __aexit__ клиента (мёртвый websocket)
     try:
         sys.stdout.flush()
         sys.stderr.flush()
