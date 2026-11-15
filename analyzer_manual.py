@@ -215,6 +215,50 @@ def print_card(pair, classic_sig, sr_sig, price, stats, c_reason="", s_reason=""
     print("\n".join(lines))
 
 
+async def combined_analysis(ssid, pair, cfg):
+    """PATCH_077c: Classic primary (60s), SR_CCI справочно (30s).
+    Два отдельных PocketOptionAsync — live-генератор Classic закрывает websocket."""
+    classic_sig = None
+    classic_reason = "SKIP"
+    price = None
+    try:
+        async with PocketOptionAsync(ssid=ssid) as client:
+            r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=60)
+            if isinstance(r, tuple) and len(r) >= 3:
+                classic_sig, price, classic_reason = r[0], r[1], r[2]
+            elif isinstance(r, tuple) and len(r) == 2:
+                classic_sig, price = r[0], r[1]
+                classic_reason = "OK" if classic_sig else "NO_SIGNAL"
+    except asyncio.TimeoutError:
+        classic_reason = "TIMEOUT"
+    except Exception as e:
+        classic_reason = f"ERR:{type(e).__name__}"
+
+    sr_sig = None
+    sr_reason = "SKIP"
+    try:
+        async with PocketOptionAsync(ssid=ssid) as client:
+            r = await asyncio.wait_for(
+                full_analysis_sr_cci(client, pair, cfg, fetch_candles_safe, get_current_price_safe),
+                timeout=30
+            )
+            if isinstance(r, tuple) and len(r) >= 3:
+                sr_sig, sr_price, sr_reason = r[0], r[1], r[2]
+                if price is None:
+                    price = sr_price
+            elif isinstance(r, tuple) and len(r) == 2:
+                sr_sig, sr_price = r[0], r[1]
+                if price is None:
+                    price = sr_price
+                sr_reason = "OK" if sr_sig else "NO_SIGNAL"
+    except asyncio.TimeoutError:
+        sr_reason = "TIMEOUT"
+    except Exception as e:
+        sr_reason = f"ERR:{type(e).__name__}"
+
+    return classic_sig, sr_sig, price, classic_reason, sr_reason
+
+
 async def main():
     if len(sys.argv) < 2:
         print("Использование: python analyzer_manual.py EURUSD_otc")
