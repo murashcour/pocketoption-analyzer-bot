@@ -644,6 +644,12 @@ async def main():
 
     # --top N
     if arg == "--auto":
+        ssid = load_ssid()
+        if not ssid:
+            print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
+            sys.exit(1)
+        cmd_pgrep_check()
+        cfg = load_cfg()
         await cmd_auto(ssid, cfg)
         return
 
