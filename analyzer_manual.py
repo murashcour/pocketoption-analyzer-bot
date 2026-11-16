@@ -68,6 +68,26 @@ def load_stats_one(pair, path):
     return st
 
 
+
+def load_all_stats(path):
+    """Возвращает {pair: stats} из JSON-файла (с нормализацией total)."""
+    if not path.exists():
+        return {}
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    for p, st in d.items():
+        if isinstance(st, dict) and "total" not in st:
+            w = int(st.get("wins", 0) or 0)
+            l = int(st.get("losses", 0) or 0)
+            if w or l:
+                st["total"] = w + l
+    return d
+
+
 def _dw(s):
     import unicodedata
     w = 0
@@ -204,43 +224,227 @@ async def analyze_pair(client, pair, cfg):
     return classic_sig, sr_sig, price, classic_reason, sr_reason
 
 
-async def main():
-    if len(sys.argv) < 2:
-        print("Использование: python analyzer_manual.py EURHUF_otc")
-        sys.exit(1)
-
-    raw = sys.argv[1].strip()
+def _norm_pair(raw: str) -> str:
+    """EURUSD_OTC -> EURUSD_otc; EURUSD -> EURUSD_otc."""
     if "_" in raw:
         base, suffix = raw.rsplit("_", 1)
-        pair = base.upper() + "_" + suffix.lower()
-    else:
-        pair = raw.upper() + "_otc"
+        return base.upper() + "_" + suffix.lower()
+    return raw.upper() + "_otc"
 
-    ssid = load_ssid()
-    if not ssid:
-        print("❌ SSID не найден")
-        sys.exit(1)
 
-    # pgrep-проверка
+def cmd_list(min_wr: float = 50.0):
+    """Список пар с WR >= min_wr, сортировка по max(Classic, SR_CCI) убыванию.
+    Не требует API — работает даже при запущенном боте."""
+    classic = load_all_stats(CLASSIC_STATS)
+    sr_cci = load_all_stats(SR_CCI_STATS)
+    all_pairs = set(classic.keys()) | set(sr_cci.keys())
+
+    rows = []
+    for p in all_pairs:
+        c = classic.get(p, {}).get("winrate")
+        s = sr_cci.get(p, {}).get("winrate")
+        if (c is not None and c >= min_wr) or (s is not None and s >= min_wr):
+            rows.append((p, c, s))
+
+    rows.sort(key=lambda x: max(x[1] or 0, x[2] or 0), reverse=True)
+
+    print(f"\U0001F4CA \u041f\u0430\u0440\u044b \u0441 WR \u2265 {min_wr}% \u2014 {len(rows)} \u0448\u0442. "
+          f"(\u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e max WR)\n")
+    print(f"{'PAIR':22} {'Classic':>10} {'SR_CCI':>10}  {'\u0420\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u044f':<20}")
+    print("-" * 70)
+    for p, c, s in rows:
+        c_str = f"{c:.1f}%" if c is not None else "\u2014"
+        s_str = f"{s:.1f}%" if s is not None else "\u2014"
+        # Рекомендация
+        if c is not None and s is not None:
+            if c >= 52 and s < 50:
+                rec = "Classic \u2b50"
+            elif s >= 52 and c < 50:
+                rec = "SR_CCI \u2b50"
+            elif c >= 52 and s >= 52:
+                rec = "\u041e\u0411\u0410 \u2b50\u2b50"
+            elif c >= 50 and s >= 50:
+                rec = "\u043f\u043e\u0433\u0440\u0430\u043d\u0438\u0447\u043d\u0430\u044f"
+            else:
+                rec = "\u2014"
+        elif c is not None and c >= 50:
+            rec = "Classic"
+        elif s is not None and s >= 50:
+            rec = "SR_CCI"
+        else:
+            rec = "\u2014"
+        print(f"{p:22} {c_str:>10} {s_str:>10}  {rec:<20}")
+    print()
+    print("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435:")
+    print("  python analyzer_manual.py <PAIR>       \u2014 \u0430\u043d\u0430\u043b\u0438\u0437 \u043e\u0434\u043d\u043e\u0439 \u043f\u0430\u0440\u044b")
+    print("  python analyzer_manual.py --top 5      \u2014 \u0442\u043e\u043f-5 \u043f\u043e WR")
+    print("  python analyzer_manual.py              \u2014 \u0438\u043d\u0442\u0435\u0440\u0430\u043a\u0442\u0438\u0432")
+
+
+def cmd_pgrep_check():
+    """Проверка, что бот не работает (для режимов с API)."""
     pg = subprocess.run(["pgrep", "-f", "analyzer_bot.py"], capture_output=True, text=True)
     if pg.stdout.strip():
         pids = ", ".join(pg.stdout.strip().split())
-        print(f"⚠ Бот работает (PID: {pids}). Остановите перед анализатором.")
-        print("   touch stop.flag  # или  pkill -f analyzer_bot.py")
+        print(f"\u26a0 \u0411\u043e\u0442 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 (PID: {pids}). \u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u0435 \u043f\u0435\u0440\u0435\u0434 \u0430\u043d\u0430\u043b\u0438\u0437\u0430\u0442\u043e\u0440\u043e\u043c.")
+        print("   touch stop.flag  # \u0438\u043b\u0438  pkill -f analyzer_bot.py")
         sys.exit(2)
 
-    cfg = load_cfg()
+
+async def analyze_one_pair(ssid: str, pair: str, cfg: dict):
+    """Полный анализ одной пары: сессия PocketOptionAsync + карточка."""
     classic_cfg = dict(cfg)
     classic_cfg["strategy_mode"] = "Classic"
     analyzer_bot.CFG = classic_cfg
 
-    print(f"⏳ Анализ {pair}...")
     async with PocketOptionAsync(ssid=ssid) as client:
         classic_sig, sr_sig, price, c_reason, s_reason = await analyze_pair(client, pair, cfg)
 
     c_stats = load_stats_one(pair, CLASSIC_STATS)
     s_stats = load_stats_one(pair, SR_CCI_STATS)
     print_card(pair, classic_sig, sr_sig, price, c_stats, s_stats, c_reason, s_reason)
+
+
+def _get_top_pairs(n: int, min_wr: float = 50.0):
+    """Возвращает список [(pair, best_wr)] — топ по max(Classic, SR_CCI)."""
+    classic = load_all_stats(CLASSIC_STATS)
+    sr_cci = load_all_stats(SR_CCI_STATS)
+    all_pairs = set(classic.keys()) | set(sr_cci.keys())
+    rows = []
+    for p in all_pairs:
+        c = classic.get(p, {}).get("winrate") or 0
+        s = sr_cci.get(p, {}).get("winrate") or 0
+        best = max(c, s)
+        if best >= min_wr:
+            rows.append((p, best))
+    rows.sort(key=lambda x: x[1], reverse=True)
+    return rows[:n]
+
+
+async def cmd_top(n: int, min_wr: float = 50.0):
+    """Анализ топ-N пар по WR."""
+    if n < 1 or n > 20:
+        print("\u274c N \u0434\u043e\u043b\u0436\u043d\u043e \u0431\u044b\u0442\u044c 1..20")
+        sys.exit(1)
+
+    ssid = load_ssid()
+    if not ssid:
+        print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
+        sys.exit(1)
+
+    cmd_pgrep_check()
+    cfg = load_cfg()
+
+    top = _get_top_pairs(n, min_wr)
+    if not top:
+        print(f"\u26a0 \u041d\u0435\u0442 \u043f\u0430\u0440 \u0441 WR \u2265 {min_wr}%")
+        os._exit(0)
+
+    pairs_str = ", ".join(f"{p}({w:.1f}%)" for p, w in top)
+    print(f"\U0001F504 \u0422\u043e\u043f-{len(top)} \u043f\u043e WR (\u2265 {min_wr}%): {pairs_str}\n")
+    print(f"\u23f1 \u041f\u0440\u0438\u043c\u0435\u0440\u043d\u043e {len(top) * 45}\u2013{len(top) * 60} \u0441\u0435\u043a\n")
+
+    for i, (pair, wr) in enumerate(top, 1):
+        print(f"\n{'=' * 56}")
+        print(f"[{i}/{len(top)}] {pair}  (best WR {wr:.1f}%)")
+        print(f"{'=' * 56}")
+        try:
+            await analyze_one_pair(ssid, pair, cfg)
+        except Exception as e:
+            print(f"\u274c \u041e\u0448\u0438\u0431\u043a\u0430 {pair}: {type(e).__name__}: {e}")
+
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)
+
+
+async def cmd_interactive():
+    """Интерактив: спрашивает пару, анализирует, повторяет."""
+    ssid = load_ssid()
+    if not ssid:
+        print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
+        sys.exit(1)
+
+    cmd_pgrep_check()
+    cfg = load_cfg()
+
+    print("\U0001F3AE \u0418\u043d\u0442\u0435\u0440\u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c. \u041a\u043e\u043c\u0430\u043d\u0434\u044b:")
+    print("  PAIR        \u2014 \u0430\u043d\u0430\u043b\u0438\u0437 \u043f\u0430\u0440\u044b (\u043d\u0430\u043f\u0440. EURHUF_otc)")
+    print("  list        \u2014 \u0441\u043f\u0438\u0441\u043e\u043a \u043f\u0430\u0440 \u0441 WR \u2265 50%")
+    print("  q / exit    \u2014 \u0432\u044b\u0445\u043e\u0434\n")
+
+    while True:
+        try:
+            user = input("\u041f\u0430\u0440\u0430: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\u23f9 \u0412\u044b\u0445\u043e\u0434")
+            break
+        if not user:
+            continue
+        if user.lower() in ("q", "quit", "exit"):
+            print("\u23f9 \u0412\u044b\u0445\u043e\u0434")
+            break
+        if user.lower() == "list":
+            cmd_list(50.0)
+            continue
+
+        pair = _norm_pair(user)
+        print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}...")
+        try:
+            await analyze_one_pair(ssid, pair, cfg)
+        except Exception as e:
+            print(f"\u274c \u041e\u0448\u0438\u0431\u043a\u0430: {type(e).__name__}: {e}")
+
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(0)
+
+
+async def main():
+    # Без аргументов — интерактив
+    if len(sys.argv) < 2:
+        await cmd_interactive()
+        return
+
+    arg = sys.argv[1].strip().lower()
+
+    # --list (без API, работает даже при работающем боте)
+    if arg == "--list":
+        cmd_list(50.0)
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        os._exit(0)
+
+    # --top N
+    if arg == "--top":
+        if len(sys.argv) < 3 or not sys.argv[2].strip().isdigit():
+            print("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435: python analyzer_manual.py --top N   (N = 1..20)")
+            sys.exit(1)
+        n = int(sys.argv[2].strip())
+        await cmd_top(n)
+        return
+
+    # Обычный анализ одной пары
+    pair = _norm_pair(sys.argv[1].strip())
+
+    ssid = load_ssid()
+    if not ssid:
+        print("\u274c SSID \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d")
+        sys.exit(1)
+
+    cmd_pgrep_check()
+    cfg = load_cfg()
+
+    print(f"\u23f3 \u0410\u043d\u0430\u043b\u0438\u0437 {pair}...")
+    await analyze_one_pair(ssid, pair, cfg)
 
     try:
         sys.stdout.flush()
