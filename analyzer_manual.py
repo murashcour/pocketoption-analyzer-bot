@@ -33,6 +33,8 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 CLASSIC_STATS = Path(BASE_DIR) / "pair_stats_classic.json"
 SR_CCI_STATS = Path(BASE_DIR) / "pair_stats_sr_cci.json"
 SSID_FILE = os.path.expanduser("~/.po_ssid")
+PAYOUT_CACHE = Path(BASE_DIR) / "pair_payouts.json"
+PAYOUT_TTL = 600
 
 
 def load_ssid():
@@ -447,6 +449,182 @@ async def cmd_interactive():
     os._exit(0)
 
 
+def load_payout_cache():
+    """Загружает payout из кеша pair_monitor.py. Пусто если протух."""
+    if not PAYOUT_CACHE.exists():
+        return {}
+    try:
+        d = json.loads(PAYOUT_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    ts = d.get("_ts", 0)
+    if time.time() - ts > PAYOUT_TTL:
+        return {}
+    return d
+
+
+async def refresh_payouts(client, pairs):
+    """Обновляет payout для списка пар через API."""
+    from analyzer_bot import check_payout
+    out = {"_ts": time.time()}
+    for p in pairs:
+        try:
+            v = await asyncio.wait_for(check_payout(client, p), timeout=5)
+            if v is not None:
+                out[p] = round(float(v), 1)
+        except Exception:
+            pass
+    try:
+        PAYOUT_CACHE.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return out
+
+
+async def cmd_auto(ssid: str, cfg: dict):
+    """PATCH_092: автоперебор Classic. После сигнала: +WIN / -LOSS / s skip / q выход."""
+    classic = load_all_stats(CLASSIC_STATS)
+    sr_cci = load_all_stats(SR_CCI_STATS)
+    blacklist = get_blacklist()
+
+    MIN_WR_AUTO = 45.0
+    MIN_SIGNALS = 200
+
+    async with PocketOptionAsync(ssid=ssid) as client:
+        payouts = load_payout_cache()
+        if not payouts:
+            print("\u23f3 \u041e\u0431\u043d\u043e\u0432\u043b\u044f\u044e payout (\u043a\u0435\u0448 \u043f\u0443\u0441\u0442)... 20-30 \u0441\u0435\u043a")
+            all_pairs = list(set(classic.keys()) | set(sr_cci.keys()))
+            payouts = await refresh_payouts(client, all_pairs)
+            print(f"   \u2705 Payout \u043e\u0431\u043d\u043e\u0432\u043b\u0451\u043d ({len(payouts) - 1} \u043f\u0430\u0440)")
+        else:
+            print(f"   \u2705 Payout \u0438\u0437 \u043a\u0435\u0448\u0430 ({len(payouts) - 1} \u043f\u0430\u0440)")
+
+        candidates = []
+        for p in classic.keys():
+            c_wr = classic[p].get("winrate") or 0
+            c_tot = classic[p].get("total", 0)
+            s_tot = sr_cci.get(p, {}).get("total", 0)
+            if c_wr < MIN_WR_AUTO:
+                continue
+            if max(c_tot, s_tot) < MIN_SIGNALS:
+                continue
+            if p in blacklist:
+                continue
+            pay = payouts.get(p)
+            threshold = 80.0 if p.endswith("_otc") else 75.0
+            if pay is None or pay < threshold:
+                continue
+            candidates.append({"pair": p, "wr": c_wr, "pay": pay})
+
+        candidates.sort(key=lambda x: -x["wr"])
+
+        if not candidates:
+            print("\u274c \u041d\u0435\u0442 \u043f\u0430\u0440 \u043f\u043e\u0441\u043b\u0435 \u0444\u0438\u043b\u044c\u0442\u0440\u043e\u0432")
+            os._exit(0)
+
+        print(f"\n\U0001F504 \u0413\u043e\u0442\u043e\u0432\u043e: {len(candidates)} \u043f\u0430\u0440 (\u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e Classic WR)\n")
+        for i, c in enumerate(candidates, 1):
+            print(f"   {i}. {c['pair']:20} Classic {c['wr']:5.1f}%  payout {c['pay']:3.0f}%")
+        print()
+
+        classic_cfg = dict(cfg)
+        classic_cfg["strategy_mode"] = "Classic"
+        analyzer_bot.CFG = classic_cfg
+
+        idx = 0
+        pass_num = 1
+        BLUE = "\033[94m"
+        RED = "\033[91m"
+        RESET = "\033[0m"
+
+        while True:
+            if idx >= len(candidates):
+                print(f"\n\u2705 \u041f\u0440\u043e\u0445\u043e\u0434 {pass_num} \u0437\u0430\u0432\u0435\u0440\u0448\u0451\u043d: {len(candidates)} \u043f\u0430\u0440")
+                try:
+                    ans = input("[r] \u043d\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0445\u043e\u0434 / [q] \u0432\u044b\u0445\u043e\u0434: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    ans = "q"
+                if ans != "r":
+                    print("\n\u23f9 \u0412\u044b\u0445\u043e\u0434")
+                    try:
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+                    os._exit(0)
+                idx = 0
+                pass_num += 1
+                continue
+
+            c = candidates[idx]
+            pair = c["pair"]
+            print(f"\n[{idx + 1}/{len(candidates)}] {pair} (Classic {c['wr']:.1f}%, payout {c['pay']:.0f}%)")
+            print("   \u23f3 \u0410\u043d\u0430\u043b\u0438\u0437...")
+
+            t0 = time.time()
+            try:
+                r = await asyncio.wait_for(classic_full_analysis(client, pair), timeout=30)
+            except asyncio.TimeoutError:
+                print("   \u23f1 \u0422\u0430\u0439\u043c\u0430\u0443\u0442 \u2192 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f")
+                idx += 1
+                continue
+            except Exception as e:
+                print(f"   \u274c {type(e).__name__}: {e} \u2192 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f")
+                idx += 1
+                continue
+
+            dt = time.time() - t0
+
+            if isinstance(r, tuple) and len(r) >= 3:
+                sig, price, reason = r[0], r[1], r[2]
+            elif isinstance(r, tuple) and len(r) == 2:
+                sig, price = r[0], r[1]
+                reason = "OK" if sig else "NO_SIGNAL"
+            else:
+                sig, price, reason = r, None, ""
+
+            if not sig:
+                print(f"   Classic: \u2014 ({reason}) [{dt:.1f}s] \u2192 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f")
+                idx += 1
+                continue
+
+            color = BLUE if sig == "CALL" else RED
+            arrow = "\u2b06" if sig == "CALL" else "\u2b07"
+            print(f"\n   \u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557")
+            print(f"   \u2551 \U0001F3AF \u0421\u0418\u0413\u041d\u0410\u041b: {pair}  \u2192  {color}{arrow} {sig}{RESET}")
+            print(f"   \u2551 WR Classic: {c['wr']:.1f}%   |   Payout: {c['pay']:.0f}%")
+            if price:
+                print(f"   \u2551 \u0426\u0435\u043d\u0430: {price:.5f}")
+            print(f"   \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d")
+            print(f"   \U0001F3AC \u041e\u0442\u043a\u0440\u043e\u0439\u0442\u0435: {pair} {sig} $1.00, 60\u0441")
+
+            while True:
+                try:
+                    ans = input("   [+] WIN  [-] LOSS  [s] skip  [q] \u0432\u044b\u0445\u043e\u0434: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    ans = "q"
+                if ans == "+":
+                    print(f"   \u2705 WIN \u2192 \u043e\u0441\u0442\u0430\u0451\u043c\u0441\u044f \u043d\u0430 {pair}")
+                    break
+                elif ans == "-":
+                    print("   \u274c LOSS \u2192 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f")
+                    idx += 1
+                    break
+                elif ans in ("s", ""):
+                    print("   \u2192 \u043f\u0440\u043e\u043f\u0443\u0441\u043a, \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0430\u044f")
+                    idx += 1
+                    break
+                elif ans == "q":
+                    print("\n\u23f9 \u0412\u044b\u0445\u043e\u0434")
+                    try:
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+                    os._exit(0)
+                else:
+                    print("   \u041d\u0435 \u043f\u043e\u043d\u044f\u043b. +, -, s, q")
+
+
 async def main():
     # Без аргументов — интерактив
     if len(sys.argv) < 2:
@@ -465,6 +643,10 @@ async def main():
         os._exit(0)
 
     # --top N
+    if arg == "--auto":
+        await cmd_auto(ssid, cfg)
+        return
+
     if arg == "--top":
         if len(sys.argv) < 3 or not sys.argv[2].strip().isdigit():
             print("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435: python analyzer_manual.py --top N   (N = 1..20)")
