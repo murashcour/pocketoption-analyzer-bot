@@ -88,6 +88,16 @@ def load_all_stats(path):
     return d
 
 
+
+def get_blacklist():
+    """Возвращает set пар из EXOTIC_BLACKLIST (read-only, не трогает бот)."""
+    try:
+        import analyzer_bot
+        return set(analyzer_bot.EXOTIC_BLACKLIST)
+    except Exception:
+        return set()
+
+
 def _dw(s):
     import unicodedata
     w = 0
@@ -232,48 +242,79 @@ def _norm_pair(raw: str) -> str:
     return raw.upper() + "_otc"
 
 
-def cmd_list(min_wr: float = 50.0):
-    """Список пар с WR >= min_wr, сортировка по max(Classic, SR_CCI) убыванию.
-    Не требует API — работает даже при запущенном боте."""
+def cmd_list(min_wr: float = 50.0, min_signals: int = 200):
+    """Список пар с WR >= min_wr и сигналов >= min_signals, сортировка по max WR.
+    Не требует API — работает даже при запущенном боте.
+    [BL] — пара в EXOTIC_BLACKLIST (мёртвая для бота, но в JSON есть)."""
     classic = load_all_stats(CLASSIC_STATS)
     sr_cci = load_all_stats(SR_CCI_STATS)
+    blacklist = get_blacklist()
     all_pairs = set(classic.keys()) | set(sr_cci.keys())
 
     rows = []
     for p in all_pairs:
-        c = classic.get(p, {}).get("winrate")
-        s = sr_cci.get(p, {}).get("winrate")
-        if (c is not None and c >= min_wr) or (s is not None and s >= min_wr):
-            rows.append((p, c, s))
+        c = classic.get(p, {})
+        s = sr_cci.get(p, {})
+        c_wr = c.get("winrate")
+        s_wr = s.get("winrate")
+        c_tot = c.get("total", 0)
+        s_tot = s.get("total", 0)
+        best_wr = max(c_wr or 0, s_wr or 0)
+        best_tot = max(c_tot, s_tot)
+        if best_wr < min_wr:
+            continue
+        if best_tot < min_signals:
+            continue
+        rows.append({
+            "pair": p,
+            "c": c_wr, "s": s_wr,
+            "tot": best_tot,
+            "best": best_wr,
+            "bl": p in blacklist,
+        })
 
-    rows.sort(key=lambda x: max(x[1] or 0, x[2] or 0), reverse=True)
+    rows.sort(key=lambda x: x["best"], reverse=True)
 
-    print(f"\U0001F4CA \u041f\u0430\u0440\u044b \u0441 WR \u2265 {min_wr}% \u2014 {len(rows)} \u0448\u0442. "
-          f"(\u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e max WR)\n")
-    print(f"{'PAIR':22} {'Classic':>10} {'SR_CCI':>10}  {'\u0420\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u044f':<20}")
-    print("-" * 70)
-    for p, c, s in rows:
-        c_str = f"{c:.1f}%" if c is not None else "\u2014"
-        s_str = f"{s:.1f}%" if s is not None else "\u2014"
+    print(f"\n\U0001F4CA \u041f\u0430\u0440\u044b \u0441 WR \u2265 {min_wr}% \u0438 \u2265 {min_signals} \u0441\u0438\u0433\u043d. "
+          f"\u2014 {len(rows)} \u0448\u0442. (\u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e max WR)\n")
+    print(f"{'PAIR':24} {'Classic':>10} {'SR_CCI':>10} {'\u0421\u0438\u0433\u043d.':>7}  {'\u0420\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u044f':<20}")
+    print("-" * 82)
+    n_bl = 0
+    for r in rows:
+        p = r["pair"]
+        marker = " [BL]" if r["bl"] else ""
+        if r["bl"]:
+            n_bl += 1
+        label = p + marker
+        if len(label) > 24:
+            label = label[:23] + "."
+        c_str = f"{r['c']:.1f}%" if r["c"] is not None else "\u2014"
+        s_str = f"{r['s']:.1f}%" if r["s"] is not None else "\u2014"
         # Рекомендация
-        if c is not None and s is not None:
-            if c >= 52 and s < 50:
+        c_wr, s_wr = r["c"], r["s"]
+        if r["bl"]:
+            rec = "BLACKLIST"
+        elif c_wr is not None and s_wr is not None:
+            if c_wr >= 52 and s_wr < 50:
                 rec = "Classic \u2b50"
-            elif s >= 52 and c < 50:
+            elif s_wr >= 52 and c_wr < 50:
                 rec = "SR_CCI \u2b50"
-            elif c >= 52 and s >= 52:
+            elif c_wr >= 52 and s_wr >= 52:
                 rec = "\u041e\u0411\u0410 \u2b50\u2b50"
-            elif c >= 50 and s >= 50:
+            elif c_wr >= 50 and s_wr >= 50:
                 rec = "\u043f\u043e\u0433\u0440\u0430\u043d\u0438\u0447\u043d\u0430\u044f"
             else:
                 rec = "\u2014"
-        elif c is not None and c >= 50:
+        elif c_wr is not None and c_wr >= 50:
             rec = "Classic"
-        elif s is not None and s >= 50:
+        elif s_wr is not None and s_wr >= 50:
             rec = "SR_CCI"
         else:
             rec = "\u2014"
-        print(f"{p:22} {c_str:>10} {s_str:>10}  {rec:<20}")
+        print(f"{label:24} {c_str:>10} {s_str:>10} {r['tot']:>7}  {rec:<20}")
+
+    print()
+    print(f"\u0412\u0441\u0435\u0433\u043e: {len(rows)} \u043f\u0430\u0440 (\u0438\u0437 \u043d\u0438\u0445 \u0432 \u0431\u043b\u044d\u043a\u043b\u0438\u0441\u0442\u0435: {n_bl})")
     print()
     print("\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u0435:")
     print("  python analyzer_manual.py <PAIR>       \u2014 \u0430\u043d\u0430\u043b\u0438\u0437 \u043e\u0434\u043d\u043e\u0439 \u043f\u0430\u0440\u044b")
