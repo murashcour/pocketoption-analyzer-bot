@@ -53,6 +53,7 @@ CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 CONFIG_DEFAULT_FILE = os.path.join(BASE_DIR, "config.default.json")
 LOG_FILE = os.path.join(BASE_DIR, "analyzer_bot.log")
 STOP_FLAG = os.path.join(BASE_DIR, "stop.flag")
+PAUSE_FLAG = os.path.join(BASE_DIR, "pause.flag")  # PATCH_098
 SSID_FILE = os.path.expanduser("~/.po_ssid")
 
 # ==================== КОНФИГ ПО УМОЛЧАНИЮ ====================
@@ -244,6 +245,10 @@ DEFAULT_CONFIG = {
     "log_timezone_offset_hours": 3,
     "pause_after_losses": 10,
     "pause_after_losses_sec": 1800,
+    # PATCH_098
+    "work_hours_enabled": True,
+    "work_hours": [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+    "pause_check_interval_sec": 60,
 }
 # /DEFAULT_CONFIG_V2
 
@@ -3252,6 +3257,21 @@ class Trader:
         last_payout_check = time.time()
 
         while True:
+            # PATCH_098: проверка паузы
+            if os.path.exists(PAUSE_FLAG):
+                _ps = CFG.get('pause_check_interval_sec', 60)
+                logger.info(f'⏸ Пауза (pause.flag) — жду {_ps} сек')
+                await asyncio.sleep(_ps)
+                continue
+            # PATCH_098: проверка рабочих часов
+            if CFG.get('work_hours_enabled', False):
+                _msk_h = (datetime.now(timezone.utc).hour + 3) % 24
+                _wh = CFG.get('work_hours', [])
+                if _msk_h not in _wh:
+                    _ps = CFG.get('pause_check_interval_sec', 60)
+                    logger.info(f'⏸ Вне рабочих часов ({_msk_h}:00 МСК) — жду {_ps} сек')
+                    await asyncio.sleep(_ps)
+                    continue
             # === АВТОСТОП: ЛИМИТ СДЕЛОК ===
             if CFG.get("max_trades_enabled", False):
                 _max_trades = int(CFG.get("max_trades_count", 100))
