@@ -36,6 +36,10 @@ from typing import Optional, List, Tuple
 
 from BinaryOptionsToolsV2 import PocketOptionAsync, PocketOptionError
 
+# PATCH_099: refactor
+from candles import candle_field, get_close, get_open, get_high, get_low, get_time
+from indicators import sma, ema, rsi, atr, cci, adx, calc_vwap, calc_squeeze
+
 # PATCH_006: HUD-карточка
 try:
     from hud import print_hud, save_hud_to_json
@@ -345,98 +349,8 @@ def reset_config() -> dict:
 
 # ==================== ИНДИКАТОРЫ ====================
 # ==================== INDICATORS ====================
-def sma(prices: List[float], period: int = 14) -> Optional[float]:
-    """Simple Moving Average / Простое скользящее среднее."""
-    if len(prices) < period:
-        return None
-    return sum(prices[-period:]) / period
-
-
-def ema(prices: List[float], period: int) -> Optional[float]:
-    """Exponential Moving Average / Экспоненциальное скользящее среднее."""
-    if len(prices) < period:
-        return None
-    mult = 2 / (period + 1)
-    val = prices[0]
-    for p in prices[1:]:
-        val = (p - val) * mult + val
-    return val
-
-
-def rsi(prices: List[float], period: int = 14) -> Optional[float]:
-    """Relative Strength Index / Индекс относительной силы."""
-    if len(prices) < period + 1:
-        return None
-    deltas = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
-    gains = [d if d > 0 else 0 for d in deltas]
-    losses = [-d if d < 0 else 0 for d in deltas]
-    ag = sum(gains[-period:]) / period
-    al = sum(losses[-period:]) / period
-    if al == 0:
-        return 100.0
-    return 100 - (100 / (1 + ag / al))
-
-
-def atr(candles: List, period: int = 14) -> Optional[float]:
-    """Average True Range / Средний истинный диапазон."""
-    if len(candles) < period + 1:
-        return None
-    trs = []
-    for i in range(1, len(candles)):
-        h = get_high(candles[i])
-        l = get_low(candles[i])
-        prev_close = get_close(candles[i - 1])
-        tr = max(h - l, abs(h - prev_close), abs(l - prev_close))
-        trs.append(tr)
-    return sum(trs[-period:]) / period
-
-
-def cci(candles: List, period: int = 20) -> Optional[float]:
-    """Commodity Channel Index (PATCH_038)."""
-    if len(candles) < period:
-        return None
-    tps = []
-    for c in candles[-period:]:
-        tps.append((get_high(c) + get_low(c) + get_close(c)) / 3.0)
-    sma_tp = sum(tps) / period
-    mad = sum(abs(tp - sma_tp) for tp in tps) / period
-    if mad == 0:
-        return 0.0
-    return (tps[-1] - sma_tp) / (0.015 * mad)
-
-
 # ==================== РАБОТА СО СВЕЧАМИ ====================
 # ==================== CANDLES ====================
-def candle_field(c, field: str):
-    """Извлекает поле из свечи (dict, tuple, object)."""
-    if isinstance(c, dict):
-        return c[field]
-    if hasattr(c, field):
-        return getattr(c, field)
-    if isinstance(c, tuple) and len(c) == 2 and isinstance(c[1], dict):
-        return c[1][field]
-    idx_map = {
-        "timestamp": 0, "time": 0, "open": 1, "high": 2,
-        "low": 3, "close": 4, "volume": 5
-    }
-    if isinstance(c, (tuple, list)) and field in idx_map:
-        return c[idx_map[field]]
-    raise ValueError(f"Не могу извлечь '{field}' из свечи: {c}")
-
-
-def get_close(c): return candle_field(c, "close")
-def get_open(c): return candle_field(c, "open")
-def get_high(c): return candle_field(c, "high")
-def get_low(c): return candle_field(c, "low")
-
-
-def get_time(c):
-    try:
-        return candle_field(c, "time")
-    except (KeyError, ValueError):
-        return candle_field(c, "timestamp")
-
-
 async def fetch_candles(client, asset: str, period: int, count: int) -> List:
     """PATCH_004: get_candles_live (если доступен) с fallback на get_candles."""
     # Пробуем get_candles_live (не deprecated)
@@ -504,38 +418,6 @@ async def get_current_price(client, pair: str) -> Optional[float]:
 # ==================== END OF PART 1 ====================
 # ==================== АНАЛИЗ 1м ====================
 # ==================== 1m ANALYSIS ====================
-def adx(candles: List, period: int = 14) -> Optional[float]:
-    """ADX — сила тренда (0-100). MANUAL_V4."""
-    if len(candles) < period * 2:
-        return None
-    trs = []
-    plus_dm = []
-    minus_dm = []
-    for i in range(1, len(candles)):
-        h = get_high(candles[i])
-        l = get_low(candles[i])
-        prev_h = get_high(candles[i - 1])
-        prev_l = get_low(candles[i - 1])
-        prev_c = get_close(candles[i - 1])
-        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
-        trs.append(tr)
-        up = h - prev_h
-        down = prev_l - l
-        plus_dm.append(up if up > down and up > 0 else 0)
-        minus_dm.append(down if down > up and down > 0 else 0)
-    
-    atr_val = sum(trs[-period:]) / period
-    if atr_val == 0:
-        return 0.0
-    plus_di = sum(plus_dm[-period:]) / period / atr_val * 100
-    minus_di = sum(minus_dm[-period:]) / period / atr_val * 100
-    di_sum = plus_di + minus_di
-    if di_sum == 0:
-        return 0.0
-    dx = abs(plus_di - minus_di) / di_sum * 100
-    return dx
-
-
 def analyze_1m(candles: List) -> Optional[str]:
     """Полный анализ 1-минутного ТФ. Возвращает CALL/PUT/None."""
     if len(candles) < 50:
@@ -718,63 +600,6 @@ def get_adaptive_expiration(candles: List, price: float) -> int:
 
 
 # ADX_VWAP: дневной VWAP (средняя цена, взвешенная по объёму)
-def calc_vwap(candles: List) -> Optional[float]:
-    """Считает VWAP по переданным свечам (обычно 1м за день)."""
-    if not candles:
-        return None
-    total_pv = 0.0
-    total_v = 0.0
-    for c in candles:
-        h = get_high(c)
-        l = get_low(c)
-        cl = get_close(c)
-        v = 0
-        try:
-            v = float(c.get("volume", 0)) if isinstance(c, dict) else 0
-        except Exception:
-            v = 0
-        if v <= 0:
-            v = 1.0  # если объёма нет — считаем как 1
-        tp = (h + l + cl) / 3.0
-        total_pv += tp * v
-        total_v += v
-    if total_v <= 0:
-        return None
-    return total_pv / total_v
-
-
-
-# SQUEEZE_HYSTERESIS: Squeeze (BB внутри KC)
-def calc_squeeze(candles: List, period: int = 20, mult: float = 2.0) -> bool:
-    """True, если BB внутри KC (сжатие)."""
-    if len(candles) < period:
-        return False
-    closes = [get_close(c) for c in candles[-period:]]
-    highs = [get_high(c) for c in candles[-period:]]
-    lows = [get_low(c) for c in candles[-period:]]
-    
-    # BB
-    mid = sum(closes) / period
-    variance = sum((x - mid) ** 2 for x in closes) / period
-    std = variance ** 0.5
-    bb_upper = mid + mult * std
-    bb_lower = mid - mult * std
-    
-    # KC
-    trs = []
-    for i in range(1, len(candles[-period:])):
-        h = get_high(candles[-period:][i])
-        l = get_low(candles[-period:][i])
-        prev_c = get_close(candles[-period:][i-1])
-        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
-        trs.append(tr)
-    atr_val = sum(trs) / len(trs) if trs else 0
-    kc_upper = mid + mult * atr_val
-    kc_lower = mid - mult * atr_val
-    
-    return (bb_upper < kc_upper) and (bb_lower > kc_lower)
-
-
 async def full_analysis(client, pair: str):
     """Мульти-ТФ анализ: 1м + 5м + 15м + S/R + ATR. Возвращает (signal, price)."""
     # PATCH_097e: Flip Core
