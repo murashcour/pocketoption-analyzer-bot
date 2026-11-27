@@ -46,6 +46,14 @@ except ImportError:
     print_hud = None
     save_hud_to_json = None
 
+# PATCH_097e: Flip Core
+try:
+    from strategy_flip_core import full_analysis_flip_core
+    FLIP_CORE_AVAILABLE = True
+except ImportError:
+    FLIP_CORE_AVAILABLE = False
+    full_analysis_flip_core = None
+
 # ==================== ПУТИ ====================
 # ==================== PATHS ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -249,6 +257,9 @@ DEFAULT_CONFIG = {
     "work_hours_enabled": True,
     "work_hours": [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
     "pause_check_interval_sec": 60,
+    # PATCH_097e: Flip Core
+    "flip_core_atr_period": 14,
+    "flip_core_atr_mult": 1.0,
 }
 # /DEFAULT_CONFIG_V2
 
@@ -766,6 +777,9 @@ def calc_squeeze(candles: List, period: int = 20, mult: float = 2.0) -> bool:
 
 async def full_analysis(client, pair: str):
     """Мульти-ТФ анализ: 1м + 5м + 15м + S/R + ATR. Возвращает (signal, price)."""
+    # PATCH_097e: Flip Core
+    if CFG.get("strategy_mode") == "FlipCore" and FLIP_CORE_AVAILABLE:
+        return await full_analysis_flip_core(client, pair, CFG, fetch_candles, get_current_price)
     # PATCH_041: Если выбран режим SR_CCI, используем логику BinoView
     if CFG.get("strategy_mode") == "SR_CCI":
         return await full_analysis_sr_cci(client, pair, CFG, fetch_candles, get_current_price)
