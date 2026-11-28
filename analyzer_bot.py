@@ -3026,11 +3026,23 @@ class Trader:
         self.initial_balance = balance
         self.reference_balance = get_reference_step(balance)
         self.drawdown_count = 0
-        logger.info(
-            f"🛡 Защита от просадки: {CFG['max_drawdown_percent']}%, "
-            f"пауза {CFG['drawdown_pause_sec']//60} мин, "
-            f"макс {CFG['drawdown_max_count']} просадок"
-        )
+        # PATCH_100: drawdown mode
+        _dd_mode_init = CFG.get("drawdown_mode", "percent")
+        if _dd_mode_init == "usd":
+            _steps_init = int(CFG.get("martingale_steps_count", 5))
+            _tbl_init = CFG.get("max_drawdown_usd_per_steps", {})
+            _lim_init = float(_tbl_init.get(str(_steps_init), 58.49))
+            logger.info(
+                f"🛡 Защита от просадки: ${_lim_init:.2f} (USD, {_steps_init} шагов), "
+                f"пауза {CFG['drawdown_pause_sec']//60} мин, "
+                f"макс {CFG['drawdown_max_count']} просадок"
+            )
+        else:
+            logger.info(
+                f"🛡 Защита от просадки: {CFG['max_drawdown_percent']}%, "
+                f"пауза {CFG['drawdown_pause_sec']//60} мин, "
+                f"макс {CFG['drawdown_max_count']} просадок"
+            )
 
         # PATCH_054: пересчёт статистики ДО загрузки пар (чтобы использовать свежий файл)
         if CFG.get("strategy_mode") == "SR_CCI":
@@ -3165,23 +3177,39 @@ class Trader:
                                 f"${_old_ref:.0f} → ${_new_ref:.0f}"
                             )
 
-                        # === ПРОВЕРКА ПРОСАДКИ (30% / 50% в удвоении) ===
-                        if getattr(self.state, "double_mode_active", False):
-                            _dd_pct = CFG.get("max_drawdown_percent_double", 50)
-                            _dd_label = "удвоение"
+                        # === ПРОВЕРКА ПРОСАДКИ (PATCH_100: usd/percent) ===
+                        _dd_mode = CFG.get("drawdown_mode", "percent")
+                        _dd_val = self.reference_balance - current_balance
+                        _dd_hit = False
+                        _dd_limit = 0.0
+                        if _dd_mode == "usd":
+                            _steps = int(CFG.get("martingale_steps_count", 5))
+                            _table = CFG.get("max_drawdown_usd_per_steps", {})
+                            _dd_limit = float(_table.get(str(_steps), 58.49))
+                            if _dd_val >= _dd_limit:
+                                _dd_hit = True
                         else:
-                            _dd_pct = CFG.get("max_drawdown_percent", 30)
-                            _dd_label = "обычная"
-                        threshold = self.reference_balance * (
-                            1 - _dd_pct / 100
-                        )
-                        if current_balance < threshold:
+                            if getattr(self.state, "double_mode_active", False):
+                                _dd_pct = CFG.get("max_drawdown_percent_double", 50)
+                            else:
+                                _dd_pct = CFG.get("max_drawdown_percent", 30)
+                            _dd_limit = self.reference_balance * _dd_pct / 100.0
+                            if _dd_val >= _dd_limit:
+                                _dd_hit = True
+                        if _dd_hit:
                             self.drawdown_count += 1
-                            logger.warning(
-                                f"🛑 ПРОСАДКА #{self.drawdown_count} "
-                                f"({_dd_pct}%, {_dd_label}): "
-                                f"${self.reference_balance:.2f} → ${current_balance:.2f}"
-                            )
+                            if _dd_mode == "usd":
+                                logger.warning(
+                                    f"🛑 ПРОСАДКА #{self.drawdown_count} (USD, {_steps} шагов): "
+                                    f"${self.reference_balance:.2f} → ${current_balance:.2f} "
+                                    f"(${_dd_val:.2f} ≥ ${_dd_limit:.2f})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"🛑 ПРОСАДКА #{self.drawdown_count} (percent): "
+                                    f"${self.reference_balance:.2f} → ${current_balance:.2f} "
+                                    f"(${_dd_val:.2f} ≥ ${_dd_limit:.2f})"
+                                )
                             if self.drawdown_count >= CFG["drawdown_max_count"]:
                                 logger.error(
                                     f"🛑 Достигнут лимит просадок "
